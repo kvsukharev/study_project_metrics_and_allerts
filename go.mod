@@ -1,8 +1,6 @@
 module github.com/kvsukharev/go-musthave-metrics-tpl
 
-go 1.23.0
-
-toolchain go1.23.4
+go 1.24
 
 require (
 	github.com/caarlos0/env/v6 v6.10.1
