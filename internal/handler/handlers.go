@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"crypto/hmac"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"sync"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
@@ -33,64 +31,16 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Post("/update", h.updateMetricJSONHandler)
 	r.Post("/value", h.valueMetricJSONHandler)
 	r.Post("/updates", h.BatchUpdateMetrics)
-	r.Post("/update/*", h.updateHandler)
 	r.Post("/update/{type}/{name}/{value}", h.updateHandlerChi)
+	r.Post("/update/{type}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "metric value is required", http.StatusNotFound)
+	})
+	r.Post("/update/{type}", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "metric name is required", http.StatusNotFound)
+	})
 	r.Get("/value/{type}/{name}", h.valueHandler)
 	r.Get("/", h.rootHandler)
 	r.Get("/ping", h.PingHandler())
-}
-
-type MetricsStorage struct {
-	gauges   map[string]float64
-	counters map[string]int64
-	mu       sync.RWMutex
-}
-
-// BatchUpdate implements storage.Storage.
-func (m *MetricsStorage) BatchUpdate(ctx context.Context, metrics []model.Metrics) error {
-	panic("unimplemented")
-}
-
-// Close implements storage.Storage.
-func (m *MetricsStorage) Close() error {
-	panic("unimplemented")
-}
-
-// GetAllMetrics implements storage.Storage.
-func (m *MetricsStorage) GetAllMetrics() (map[string]float64, map[string]int64) {
-	panic("unimplemented")
-}
-
-// GetCounter implements storage.Storage.
-func (m *MetricsStorage) GetCounter(name string) (int64, error) {
-	panic("unimplemented")
-}
-
-// GetGauge implements storage.Storage.
-func (m *MetricsStorage) GetGauge(name string) (float64, error) {
-	panic("unimplemented")
-}
-
-// Ping implements storage.Storage.
-func (m *MetricsStorage) Ping(ctx context.Context) error {
-	panic("unimplemented")
-}
-
-// UpdateCounter implements storage.Storage.
-func (m *MetricsStorage) UpdateCounter(name string, value int64) {
-	panic("unimplemented")
-}
-
-// UpdateGauge implements storage.Storage.
-func (m *MetricsStorage) UpdateGauge(name string, value float64) {
-	panic("unimplemented")
-}
-
-func NewMetricsStorage() *MetricsStorage {
-	return &MetricsStorage{
-		gauges:   make(map[string]float64),
-		counters: make(map[string]int64),
-	}
 }
 
 func (h *Handlers) PingHandler() http.HandlerFunc {
@@ -209,41 +159,6 @@ func (h *Handlers) updateMetricJSONHandler(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// updateHandler обрабатывает запросы на обновление метрик
-func (h *Handlers) updateHandler(w http.ResponseWriter, r *http.Request) {
-	metricType := chi.URLParam(r, "type")
-	metricName := chi.URLParam(r, "name")
-	metricValue := chi.URLParam(r, "value")
-
-	switch metricType {
-	case "gauge":
-		value, err := strconv.ParseFloat(metricValue, 64)
-		if err != nil {
-			http.Error(w, "Invalid gauge value", http.StatusBadRequest)
-			return
-		}
-		h.storage.UpdateGauge(metricName, value)
-		log.Printf("Updated gauge %s = %.6f", metricName, value)
-
-	case "counter":
-		value, err := strconv.ParseInt(metricValue, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid counter value", http.StatusBadRequest)
-			return
-		}
-		h.storage.UpdateCounter(metricName, value)
-		log.Printf("Updated counter %s (added %d)", metricName, value)
-
-	default:
-		http.Error(w, "Unknown metric type. Use 'gauge' or 'counter'", http.StatusBadRequest)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "OK\n")
 }
 
 func (h *Handlers) updateHandlerChi(w http.ResponseWriter, r *http.Request) {

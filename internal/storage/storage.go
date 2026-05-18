@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
@@ -30,9 +31,22 @@ type MetricsStorage struct {
 	mu       sync.RWMutex
 }
 
-// BatchUpdate implements Storage.
 func (m *MetricsStorage) BatchUpdate(ctx context.Context, metrics []model.Metrics) error {
-	panic("unimplemented")
+	for _, metric := range metrics {
+		switch metric.MType {
+		case model.TypeGauge:
+			if metric.Value != nil {
+				m.UpdateGauge(metric.ID, *metric.Value)
+			}
+		case model.TypeCounter:
+			if metric.Delta != nil {
+				m.UpdateCounter(metric.ID, *metric.Delta)
+			}
+		default:
+			return fmt.Errorf("unknown metric type: %s", metric.MType)
+		}
+	}
+	return nil
 }
 
 // Close implements Storage.
