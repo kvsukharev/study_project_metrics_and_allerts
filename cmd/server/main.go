@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
-	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
+	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
 )
 
@@ -24,7 +24,7 @@ func run() error {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware_proj.GzipMiddleware)
+	r.Use(middlewareproj.GzipMiddleware)
 	if cfg.Key != "" {
 		r.Use(handlers.NewSHA256CheckMiddleware(cfg.Key))
 	}

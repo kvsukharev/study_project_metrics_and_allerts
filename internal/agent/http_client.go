@@ -60,7 +60,10 @@ func (c *HTTPClient) SendMetric(m model.Metrics) error {
 		req.Header.Set("HashSHA256", fmt.Sprintf("%x", hash))
 	}
 
-	c.client.Do(req)
-	// ... обработка ответа
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
 	return nil
 }

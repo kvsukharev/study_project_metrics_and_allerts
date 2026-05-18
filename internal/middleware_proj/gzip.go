@@ -1,4 +1,4 @@
-package middleware_proj
+package middlewareproj
 
 import (
 	"compress/gzip"

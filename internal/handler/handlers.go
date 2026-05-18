@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -305,7 +305,7 @@ func NewSHA256CheckMiddleware(key string) func(next http.Handler) http.Handler {
 				return
 			}
 
-			bodyBytes, err := ioutil.ReadAll(r.Body)
+			bodyBytes, err := io.ReadAll(r.Body)
 			if err != nil {
 				http.Error(w, "cannot read body", http.StatusBadRequest)
 				return
@@ -321,7 +321,7 @@ func NewSHA256CheckMiddleware(key string) func(next http.Handler) http.Handler {
 			}
 
 			// Вернуть тело для следующего обработчика
-			r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 			next.ServeHTTP(w, r)
 		})
