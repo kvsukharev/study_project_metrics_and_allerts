@@ -14,7 +14,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
-	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
+	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/server"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
 )
@@ -91,7 +91,7 @@ func main() {
 	r.Use(
 		middleware.Logger,
 		middleware.Recoverer,
-		middleware_proj.GzipMiddleware,
+		middlewareproj.GzipMiddleware,
 	)
 
 	// Регистрация маршрутов
