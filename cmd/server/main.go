@@ -9,6 +9,7 @@ import (
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
 	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/server"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
 )
 
@@ -22,9 +23,20 @@ func run() error {
 	h := handlers.NewHandlers(store)
 
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middlewareproj.GzipMiddleware)
+
+	// Применение middleware
+	r.Use(
+		middleware.Logger,
+		middleware.Recoverer,
+		middlewareproj.GzipMiddleware,
+	)
+
+	// Регистрация маршрутов
+	h.RegisterRoutes(r)
+
+	// Инициализация хранилища
+	var dbStorage *storage.PostgresStorage
+
 	if cfg.Key != "" {
 		r.Use(handlers.NewSHA256CheckMiddleware(cfg.Key))
 	}
