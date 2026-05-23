@@ -26,3 +26,6 @@ logs/*
 .idea
 .vscode
 .DS_Store
+
+# Increment notes
+increment*.md

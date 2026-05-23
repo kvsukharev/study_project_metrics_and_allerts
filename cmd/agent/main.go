@@ -17,8 +17,6 @@ import (
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/logger"
-
-	"github.com/go-chi/chi/v5"
 )
 
 // RootConfig – верхний уровень с вложенным agent_config
@@ -64,24 +62,19 @@ func run() error {
 	}
 
 	log.Info().
-		Str("Starting metrics agent with config:", "").
-		Str("Server address: %s", cfg.serverAddress).
-		Dur("Poll interval: %v", cfg.PollInterval).
-		Dur("Report interval: %v", cfg.ReportInterval)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	collector := agent.NewCollector(100, client, "http://localhost:8080")
+		Str("server_address", cfg.serverAddress).
+		Dur("poll_interval", cfg.PollInterval).
+		Dur("report_interval", cfg.ReportInterval).
+		Msg("Starting metrics agent")
 
 	serverURL := cfg.serverAddress
 	if len(serverURL) < 7 || (serverURL[:7] != "http://" && serverURL[:8] != "https://") {
 		serverURL = "http://" + serverURL
 	}
 
+	client := &http.Client{Timeout: 10 * time.Second}
+	collector := agent.NewCollector(100, client, serverURL)
 	sender := agent.NewSender(serverURL)
-
-	// Router и middleware с логированием
-	r := chi.NewRouter()
-	r.Use(logger.Middleware)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
