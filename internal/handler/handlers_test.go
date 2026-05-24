@@ -153,6 +153,60 @@ func TestGetNotFound(t *testing.T) {
 	}
 }
 
+func TestGetUnknownType(t *testing.T) {
+	r := newRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/value/unknown/foo", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404 for unknown type, got %d", w.Code)
+	}
+}
+
+func TestGetGaugeValue(t *testing.T) {
+	r := newRouter()
+
+	req := httptest.NewRequest(http.MethodPost, "/update/gauge/HeapSys/512.5", nil)
+	r.ServeHTTP(httptest.NewRecorder(), req)
+
+	req = httptest.NewRequest(http.MethodGet, "/value/gauge/HeapSys", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("expected text/plain content-type, got %s", ct)
+	}
+	if body := strings.TrimSpace(w.Body.String()); body == "" {
+		t.Error("expected non-empty body")
+	}
+}
+
+func TestCounterAccumulatesOnServer(t *testing.T) {
+	r := newRouter()
+
+	// Агент шлёт PollCount=1 несколько раз — сервер должен накапливать
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/update/counter/PollCount/1", nil)
+		r.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/value/counter/PollCount", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "5") {
+		t.Errorf("expected accumulated counter=5, got: %s", w.Body.String())
+	}
+}
+
 func TestCounterAccumulates(t *testing.T) {
 	r := newRouter()
 

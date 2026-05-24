@@ -222,7 +222,7 @@ func (h *Handlers) valueHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "%d", value)
 
 	default:
-		http.Error(w, "Unknown metric type. Use 'gauge' or 'counter'", http.StatusBadRequest)
+		http.Error(w, "Unknown metric type. Use 'gauge' or 'counter'", http.StatusNotFound)
 	}
 }
 
