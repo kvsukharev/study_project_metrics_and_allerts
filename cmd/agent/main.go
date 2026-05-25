@@ -53,10 +53,6 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if err := applyEnv(cfg); err != nil {
-		return fmt.Errorf("apply env: %w", err)
-	}
-
 	if err := parseFlags(cfg); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
@@ -176,33 +172,7 @@ func loadConfig(path string) (*AgentConfig, error) {
 }
 
 // applyEnv проверяет переменные окружения и если они есть — перекрывает параметры
-func applyEnv(cfg *AgentConfig) error {
-	// Переменная окружения ADDRESS
-	if addr := os.Getenv("ADDRESS"); addr != "" {
-		cfg.serverAddress = addr
-	}
-
-	// Переменные интервалов интервалов в секундах — парсим из строк
-	if pollStr := os.Getenv("POLL_INTERVAL"); pollStr != "" {
-		sec, err := strconv.Atoi(pollStr)
-		if err != nil {
-			return fmt.Errorf("invalid POLL_INTERVAL: %w", err)
-		}
-		cfg.PollInterval = time.Duration(sec) * time.Second
-	}
-
-	if reportStr := os.Getenv("REPORT_INTERVAL"); reportStr != "" {
-		sec, err := strconv.Atoi(reportStr)
-		if err != nil {
-			return fmt.Errorf("invalid REPORT_INTERVAL: %w", err)
-		}
-		cfg.ReportInterval = time.Duration(sec) * time.Second
-	}
-
-	return nil
-}
-
-// parseFlags применяет параметры из флагов, только если соответствующая ENV не задана (приоритет env выше)
+// parseFlags применяет флаги. Приоритет: env var > флаг > дефолт.
 func parseFlags(cfg *AgentConfig) error {
 	var (
 		flagAddress        string
@@ -210,22 +180,36 @@ func parseFlags(cfg *AgentConfig) error {
 		flagReportInterval int
 	)
 
-	flag.StringVar(&flagAddress, "a", "", "HTTP server endpoint address")
-	flag.IntVar(&flagPollInterval, "p", 0, "Poll interval in seconds")
-	flag.IntVar(&flagReportInterval, "r", 0, "Report interval in seconds")
+	flag.StringVar(&flagAddress, "a", defaultServerAddress, "HTTP server endpoint address")
+	flag.IntVar(&flagPollInterval, "p", int(defaultPollInterval/time.Second), "Poll interval in seconds")
+	flag.IntVar(&flagReportInterval, "r", int(defaultReportInterval/time.Second), "Report interval in seconds")
 
 	flag.Parse()
 
-	// Применяем флаги, если переменные окружения не заданы
-	if os.Getenv("ADDRESS") == "" && flagAddress != "" {
+	// env > флаг > дефолт
+	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
+		cfg.serverAddress = envAddr
+	} else {
 		cfg.serverAddress = flagAddress
 	}
 
-	if os.Getenv("POLL_INTERVAL") == "" && flagPollInterval > 0 {
+	if envPoll := os.Getenv("POLL_INTERVAL"); envPoll != "" {
+		sec, err := strconv.Atoi(envPoll)
+		if err != nil {
+			return fmt.Errorf("invalid POLL_INTERVAL: %w", err)
+		}
+		cfg.PollInterval = time.Duration(sec) * time.Second
+	} else {
 		cfg.PollInterval = time.Duration(flagPollInterval) * time.Second
 	}
 
-	if os.Getenv("REPORT_INTERVAL") == "" && flagReportInterval > 0 {
+	if envReport := os.Getenv("REPORT_INTERVAL"); envReport != "" {
+		sec, err := strconv.Atoi(envReport)
+		if err != nil {
+			return fmt.Errorf("invalid REPORT_INTERVAL: %w", err)
+		}
+		cfg.ReportInterval = time.Duration(sec) * time.Second
+	} else {
 		cfg.ReportInterval = time.Duration(flagReportInterval) * time.Second
 	}
 

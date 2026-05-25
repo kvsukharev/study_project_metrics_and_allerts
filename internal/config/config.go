@@ -110,6 +110,10 @@ func ParseFlags() (*ServerConfig, error) {
 	flag.StringVar(&cfg.DatabaseDSN, "d", "", "Database connection string")
 	flag.Parse()
 
+	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
+		cfg.Address = envAddr
+	}
+
 	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
 		cfg.DatabaseDSN = envDSN
 	}
