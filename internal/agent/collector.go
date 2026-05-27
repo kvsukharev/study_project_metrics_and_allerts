@@ -66,11 +66,6 @@ func (c *Collector) UpdateMetrics() {
 	c.counter["PollCount"]++
 }
 
-type AgentConfig struct {
-	BatchSize     int           `env:"BATCH_SIZE" default:"50"`
-	FlushInterval time.Duration `env:"FLUSH_INTERVAL" default:"5s"`
-}
-
 func NewCollector(batchSize int, client *http.Client, endpoint string) *Collector {
 	return &Collector{
 		BatchSize: batchSize,
@@ -81,7 +76,6 @@ func NewCollector(batchSize int, client *http.Client, endpoint string) *Collecto
 		endpoint:  endpoint, // Инициализация адреса сервера
 	}
 }
-
 
 // GetGauges возвращает копию всех gauge метрик
 func (c *Collector) GetGauges() map[string]float64 {

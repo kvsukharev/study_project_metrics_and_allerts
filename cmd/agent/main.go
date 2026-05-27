@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -64,7 +65,7 @@ func run() error {
 		Msg("Starting metrics agent")
 
 	serverURL := cfg.serverAddress
-	if len(serverURL) < 7 || (serverURL[:7] != "http://" && serverURL[:8] != "https://") {
+	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
 		serverURL = "http://" + serverURL
 	}
 

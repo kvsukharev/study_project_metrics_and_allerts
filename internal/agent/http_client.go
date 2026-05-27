@@ -34,6 +34,10 @@ func (c *HTTPClient) SendBatch(metricsBatch []model.Metrics) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
 	return nil
 }
 
@@ -65,5 +69,9 @@ func (c *HTTPClient) SendMetric(m model.Metrics) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
 	return nil
 }
