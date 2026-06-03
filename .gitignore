@@ -26,3 +26,9 @@ logs/*
 .idea
 .vscode
 .DS_Store
+
+# Claude Code
+.claude/
+
+# Increment notes
+increment*.md

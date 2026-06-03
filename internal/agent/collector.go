@@ -28,33 +28,12 @@ type Collector struct {
 }
 
 func (c *Collector) UpdateMetrics() {
-	panic("unimplemented")
-}
-
-type AgentConfig struct {
-	BatchSize     int           `env:"BATCH_SIZE" default:"50"`
-	FlushInterval time.Duration `env:"FLUSH_INTERVAL" default:"5s"`
-}
-
-func NewCollector(batchSize int, client *http.Client, endpoint string) *Collector {
-	return &Collector{
-		BatchSize: batchSize,
-		mu:        &sync.Mutex{},
-		gauge:     make(map[string]float64),
-		counter:   make(map[string]int64),
-		client:    client,   // Инициализация клиента
-		endpoint:  endpoint, // Инициализация адреса сервера
-	}
-}
-
-func (c *Collector) UdateMetrics() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	// Gauge метрики из runtime
 	c.gauge["Alloc"] = float64(m.Alloc)
 	c.gauge["BuckHashSys"] = float64(m.BuckHashSys)
 	c.gauge["Frees"] = float64(m.Frees)
@@ -82,12 +61,20 @@ func (c *Collector) UdateMetrics() {
 	c.gauge["StackSys"] = float64(m.StackSys)
 	c.gauge["Sys"] = float64(m.Sys)
 	c.gauge["TotalAlloc"] = float64(m.TotalAlloc)
-
-	//RandomValue (тип gauge) — обновляемое произвольное значение
 	c.gauge["RandomValue"] = rand.Float64()
 
-	// Counter метрики
 	c.counter["PollCount"]++
+}
+
+func NewCollector(batchSize int, client *http.Client, endpoint string) *Collector {
+	return &Collector{
+		BatchSize: batchSize,
+		mu:        &sync.Mutex{},
+		gauge:     make(map[string]float64),
+		counter:   make(map[string]int64),
+		client:    client,   // Инициализация клиента
+		endpoint:  endpoint, // Инициализация адреса сервера
+	}
 }
 
 // GetGauges возвращает копию всех gauge метрик
@@ -96,8 +83,8 @@ func (c *Collector) GetGauges() map[string]float64 {
 	defer c.mu.Unlock()
 
 	result := make(map[string]float64)
-	for k, v := range c.counter {
-		result[k] = float64(v)
+	for k, v := range c.gauge {
+		result[k] = v
 	}
 	return result
 }

@@ -17,8 +17,28 @@ type HTTPClient struct {
 	client *http.Client
 }
 
-func (c *HTTPClient) SendBatch(metricsBatch []model.Metrics) any {
-	panic("unimplemented")
+func (c *HTTPClient) SendBatch(metricsBatch []model.Metrics) error {
+	body, err := json.Marshal(metricsBatch)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", c.cfg.Address+"/updates", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func NewHTTPClient(cfg *config.Config) *HTTPClient {
@@ -49,5 +69,9 @@ func (c *HTTPClient) SendMetric(m model.Metrics) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
 	return nil
 }
