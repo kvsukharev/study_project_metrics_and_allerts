@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/caarlos0/env/v6"
 	"gopkg.in/yaml.v3"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
@@ -25,16 +25,15 @@ type RootConfig struct {
 	AgentConfig AgentConfig `yaml:"agent_config"`
 }
 
-// AgentConfig с тегами yaml и env
 type AgentConfig struct {
-	serverAddress string        `yaml:"server_adress" env:"ADDRESS"` // Обращаем внимание: env тег использует точное имя переменной
-	PollInterval   time.Duration `yaml:"poll_interval"`               // интервал в time.Duration, парсим отдельно
-	ReportInterval time.Duration `yaml:"report_interval"`             // как выше
+	Address        string `env:"ADDRESS"`
+	PollInterval   int    `env:"POLL_INTERVAL"`   // seconds
+	ReportInterval int    `env:"REPORT_INTERVAL"` // seconds
 }
 
 const (
-	defaultPollInterval   = 2 * time.Second
-	defaultReportInterval = 10 * time.Second
+	defaultPollInterval   = 2
+	defaultReportInterval = 10
 	defaultServerAddress  = "localhost:8080"
 	configPath            = "internal/config/agent.yaml"
 )
@@ -59,15 +58,18 @@ func run() error {
 	}
 
 	log.Info().
-		Str("server_address", cfg.serverAddress).
-		Dur("poll_interval", cfg.PollInterval).
-		Dur("report_interval", cfg.ReportInterval).
+		Str("address", cfg.Address).
+		Int("poll_interval", cfg.PollInterval).
+		Int("report_interval", cfg.ReportInterval).
 		Msg("Starting metrics agent")
 
-	serverURL := cfg.serverAddress
+	serverURL := cfg.Address
 	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
 		serverURL = "http://" + serverURL
 	}
+
+	pollInterval := time.Duration(cfg.PollInterval) * time.Second
+	reportInterval := time.Duration(cfg.ReportInterval) * time.Second
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	collector := agent.NewCollector(100, client, serverURL)
@@ -81,14 +83,14 @@ func run() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Info().Dur("Started metrics collection with interval: %v", cfg.PollInterval)
-		ticker := time.NewTicker(cfg.PollInterval)
+		log.Info().Dur("poll_interval", pollInterval).Msg("Started metrics collection")
+		ticker := time.NewTicker(pollInterval)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
-				log.Println("Stopping metrics collection...")
+				log.Info().Msg("Stopping metrics collection...")
 				return
 			case <-ticker.C:
 				collector.UpdateMetrics()
@@ -101,8 +103,8 @@ func run() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Info().Msgf("Started metrics reporting with interval: %v", cfg.ReportInterval)
-		ticker := time.NewTicker(cfg.ReportInterval)
+		log.Info().Dur("report_interval", reportInterval).Msg("Started metrics reporting")
+		ticker := time.NewTicker(reportInterval)
 		defer ticker.Stop()
 
 		for {
@@ -117,7 +119,7 @@ func run() error {
 					log.Info().Msg("No metrics to send")
 					continue
 				}
-				log.Info().Str("Sending metrics to %s", serverURL)
+				log.Info().Str("server_url", serverURL).Msg("Sending metrics")
 				if err := sender.SendAllMetrics(gauges, counters); err != nil {
 					log.Info().Msgf("Failed to send metrics: %v", err)
 				} else {
@@ -154,7 +156,7 @@ func run() error {
 func loadConfig(path string) (*AgentConfig, error) {
 	rootCfg := &RootConfig{
 		AgentConfig: AgentConfig{
-			serverAddress: defaultServerAddress,
+			Address:        defaultServerAddress,
 			PollInterval:   defaultPollInterval,
 			ReportInterval: defaultReportInterval,
 		},
@@ -162,7 +164,7 @@ func loadConfig(path string) (*AgentConfig, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Printf("Config file %q not found, using defaults and env variables", path)
+		log.Printf("Config file %q not found, using defaults", path)
 	} else {
 		if err := yaml.Unmarshal(data, rootCfg); err != nil {
 			return nil, fmt.Errorf("unmarshal yaml: %w", err)
@@ -172,46 +174,17 @@ func loadConfig(path string) (*AgentConfig, error) {
 	return &rootCfg.AgentConfig, nil
 }
 
-// applyEnv проверяет переменные окружения и если они есть — перекрывает параметры
-// parseFlags применяет флаги. Приоритет: env var > флаг > дефолт.
+// parseFlags применяет флаги и env vars. Приоритет: env var > флаг > дефолт.
 func parseFlags(cfg *AgentConfig) error {
-	var (
-		flagAddress        string
-		flagPollInterval   int
-		flagReportInterval int
-	)
-
-	flag.StringVar(&flagAddress, "a", defaultServerAddress, "HTTP server endpoint address")
-	flag.IntVar(&flagPollInterval, "p", int(defaultPollInterval/time.Second), "Poll interval in seconds")
-	flag.IntVar(&flagReportInterval, "r", int(defaultReportInterval/time.Second), "Report interval in seconds")
+	flag.StringVar(&cfg.Address, "a", defaultServerAddress, "HTTP server endpoint address")
+	flag.IntVar(&cfg.PollInterval, "p", defaultPollInterval, "Poll interval in seconds")
+	flag.IntVar(&cfg.ReportInterval, "r", defaultReportInterval, "Report interval in seconds")
 
 	flag.Parse()
 
-	// env > флаг > дефолт
-	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
-		cfg.serverAddress = envAddr
-	} else {
-		cfg.serverAddress = flagAddress
-	}
-
-	if envPoll := os.Getenv("POLL_INTERVAL"); envPoll != "" {
-		sec, err := strconv.Atoi(envPoll)
-		if err != nil {
-			return fmt.Errorf("invalid POLL_INTERVAL: %w", err)
-		}
-		cfg.PollInterval = time.Duration(sec) * time.Second
-	} else {
-		cfg.PollInterval = time.Duration(flagPollInterval) * time.Second
-	}
-
-	if envReport := os.Getenv("REPORT_INTERVAL"); envReport != "" {
-		sec, err := strconv.Atoi(envReport)
-		if err != nil {
-			return fmt.Errorf("invalid REPORT_INTERVAL: %w", err)
-		}
-		cfg.ReportInterval = time.Duration(sec) * time.Second
-	} else {
-		cfg.ReportInterval = time.Duration(flagReportInterval) * time.Second
+	// env.Parse перезапишет значения из env vars, давая приоритет env > флаг
+	if err := env.Parse(cfg); err != nil {
+		return fmt.Errorf("parse env: %w", err)
 	}
 
 	return nil

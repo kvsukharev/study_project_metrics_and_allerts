@@ -104,18 +104,14 @@ func ParseFlags() (*ServerConfig, error) {
 		RateLimit: 5,
 	}
 
-	flag.IntVar(&cfg.RateLimit, "RATE_LIMIT", 5, "Max concurrent requests")
-	flag.StringVar(&cfg.Key, "k", os.Getenv("KEY"), "Secret key for HMAC")
-	flag.StringVar(&cfg.Address, "a", cfg.Address, "HTTP server endpoint address")
+	flag.StringVar(&cfg.Address, "a", "localhost:8080", "HTTP server endpoint address")
+	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC")
 	flag.StringVar(&cfg.DatabaseDSN, "d", "", "Database connection string")
+	flag.IntVar(&cfg.RateLimit, "l", 5, "Max concurrent requests")
 	flag.Parse()
 
-	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
-		cfg.Address = envAddr
-	}
-
-	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
-		cfg.DatabaseDSN = envDSN
+	if err := env.Parse(cfg); err != nil {
+		return nil, fmt.Errorf("parse env: %w", err)
 	}
 
 	if flag.NArg() > 0 {
