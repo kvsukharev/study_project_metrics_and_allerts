@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.uber.org/zap"
+
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
 	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
@@ -18,11 +20,17 @@ func run() error {
 		return err
 	}
 
+	logger, err := zap.NewProduction()
+	if err != nil {
+		return err
+	}
+	defer logger.Sync()
+
 	store := storage.NewMemStorage()
 	h := handlers.NewHandlers(store)
 
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	r.Use(middlewareproj.LoggingMiddleware(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(middlewareproj.GzipMiddleware)
 	if cfg.Key != "" {
