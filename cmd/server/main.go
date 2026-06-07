@@ -30,6 +30,7 @@ func run() error {
 	h := handlers.NewHandlers(store)
 
 	r := chi.NewRouter()
+	r.Use(middleware.StripSlashes)
 	r.Use(middlewareproj.LoggingMiddleware(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(middlewareproj.GzipMiddleware)
