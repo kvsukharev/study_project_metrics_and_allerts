@@ -58,11 +58,13 @@ func (s *Sender) sendJSON(m model.Metrics) error {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", s.baseURL+"/update", bytes.NewReader(body))
+	compressed := Compress(body)
+	req, err := http.NewRequest("POST", s.baseURL+"/update", bytes.NewReader(compressed))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 
 	resp, err := s.client.Do(req)
 	if err != nil {

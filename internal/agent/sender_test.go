@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,15 @@ import (
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
+
+func decodeGzipJSON(r *http.Request, v interface{}) error {
+	gz, err := gzip.NewReader(r.Body)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	return json.NewDecoder(gz).Decode(v)
+}
 
 func TestNewSender(t *testing.T) {
 	sender := agent.NewSender("http://localhost:8080")
@@ -26,12 +36,14 @@ func TestSendGauge(t *testing.T) {
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("Expected Content-Type 'application/json', got '%s'", ct)
 		}
+		if ce := r.Header.Get("Content-Encoding"); ce != "gzip" {
+			t.Errorf("Expected Content-Encoding 'gzip', got '%s'", ce)
+		}
 		if r.URL.Path != "/update" {
 			t.Errorf("Expected path '/update', got '%s'", r.URL.Path)
 		}
-
 		var m model.Metrics
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		if err := decodeGzipJSON(r, &m); err != nil {
 			t.Errorf("Failed to decode body: %v", err)
 		}
 		if m.ID != "testGauge" || m.MType != model.TypeGauge || m.Value == nil || *m.Value != 3.14 {
@@ -52,9 +64,11 @@ func TestSendCounter(t *testing.T) {
 		if r.URL.Path != "/update" {
 			t.Errorf("Expected path '/update', got '%s'", r.URL.Path)
 		}
-
+		if ce := r.Header.Get("Content-Encoding"); ce != "gzip" {
+			t.Errorf("Expected Content-Encoding 'gzip', got '%s'", ce)
+		}
 		var m model.Metrics
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		if err := decodeGzipJSON(r, &m); err != nil {
 			t.Errorf("Failed to decode body: %v", err)
 		}
 		if m.ID != "testCounter" || m.MType != model.TypeCounter || m.Delta == nil || *m.Delta != 42 {
@@ -75,7 +89,7 @@ func TestSendAllMetrics(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var m model.Metrics
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		if err := decodeGzipJSON(r, &m); err != nil {
 			t.Errorf("Failed to decode body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return

@@ -9,41 +9,66 @@ import (
 
 type gzipResponseWriter struct {
 	http.ResponseWriter
-	writer io.Writer
+	gz         *gzip.Writer
+	status     int
+	wrote      bool
+	clientGzip bool
 }
 
-func (w gzipResponseWriter) Write(b []byte) (int, error) {
-	return w.writer.Write(b)
+func newGzipResponseWriter(w http.ResponseWriter, clientGzip bool) *gzipResponseWriter {
+	return &gzipResponseWriter{
+		ResponseWriter: w,
+		status:         http.StatusOK,
+		clientGzip:     clientGzip,
+	}
+}
+
+func (g *gzipResponseWriter) WriteHeader(code int) {
+	g.status = code
+}
+
+func (g *gzipResponseWriter) Write(data []byte) (int, error) {
+	if !g.wrote {
+		g.wrote = true
+		ct := g.Header().Get("Content-Type")
+		shouldGzip := g.clientGzip &&
+			(strings.Contains(ct, "application/json") || strings.Contains(ct, "text/html"))
+		if shouldGzip {
+			g.Header().Set("Content-Encoding", "gzip")
+			g.gz = gzip.NewWriter(g.ResponseWriter)
+		}
+		g.ResponseWriter.WriteHeader(g.status)
+	}
+	if g.gz != nil {
+		return g.gz.Write(data)
+	}
+	return g.ResponseWriter.Write(data)
+}
+
+func (g *gzipResponseWriter) close() {
+	if g.gz != nil {
+		g.gz.Close()
+	}
+	if !g.wrote {
+		g.ResponseWriter.WriteHeader(g.status)
+	}
 }
 
 func GzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Распаковка gzip тела запроса, если есть
 		if r.Header.Get("Content-Encoding") == "gzip" {
-			gzipReader, err := gzip.NewReader(r.Body)
+			gz, err := gzip.NewReader(r.Body)
 			if err != nil {
 				http.Error(w, "Invalid gzip body", http.StatusBadRequest)
 				return
 			}
-			defer gzipReader.Close()
-			r.Body = gzipReader
+			defer gz.Close()
+			r.Body = io.NopCloser(gz)
 		}
 
-		// Сжатие ответа, если клиент поддерживает gzip
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Подготавливаем gzip writer
-		w.Header().Set("Content-Encoding", "gzip")
-		gzipWriter := gzip.NewWriter(w)
-		defer gzipWriter.Close()
-
-		// Оборачиваем ResponseWriter
-		grw := gzipResponseWriter{ResponseWriter: w, writer: gzipWriter}
-
-		// Запускаем следующий обработчик с оберткой
+		clientGzip := strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+		grw := newGzipResponseWriter(w, clientGzip)
+		defer grw.close()
 		next.ServeHTTP(grw, r)
 	})
 }
