@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -74,7 +77,6 @@ func run() error {
 		}
 	}
 
-	// Choose storage implementation based on sync mode
 	var store storage.Storage
 	if cfg.FileStoragePath != "" && cfg.StoreIntervalSec == 0 {
 		store = &syncStorage{MetricsStorage: mem, path: cfg.FileStoragePath}
@@ -82,15 +84,23 @@ func run() error {
 		store = mem
 	}
 
-	// Periodic save goroutine
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Periodic save goroutine — listens to context for graceful shutdown.
 	if cfg.FileStoragePath != "" && cfg.StoreIntervalSec > 0 {
 		interval := time.Duration(cfg.StoreIntervalSec) * time.Second
 		go func() {
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
-			for range ticker.C {
-				if err := saveMetrics(mem, cfg.FileStoragePath); err != nil {
-					log.Printf("Failed to save metrics: %v", err)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := saveMetrics(mem, cfg.FileStoragePath); err != nil {
+						log.Printf("Failed to save metrics: %v", err)
+					}
 				}
 			}
 		}()
@@ -108,8 +118,30 @@ func run() error {
 	}
 	h.RegisterRoutes(r)
 
+	srv := &http.Server{Addr: cfg.Address, Handler: r}
+
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+
 	log.Printf("Starting server on %s", cfg.Address)
-	return http.ListenAndServe(cfg.Address, r)
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+
+	// Final snapshot on shutdown.
+	if cfg.FileStoragePath != "" {
+		if err := saveMetrics(mem, cfg.FileStoragePath); err != nil {
+			log.Printf("Failed to save final snapshot: %v", err)
+		} else {
+			log.Printf("Final snapshot saved to %s", cfg.FileStoragePath)
+		}
+	}
+
+	return nil
 }
 
 func loadMetrics(store *storage.MetricsStorage, path string) error {
@@ -141,6 +173,8 @@ func loadMetrics(store *storage.MetricsStorage, path string) error {
 	return nil
 }
 
+// saveMetrics writes metrics atomically via a temp file + rename to avoid
+// corrupt state if the process is killed mid-write.
 func saveMetrics(store *storage.MetricsStorage, path string) error {
 	gauges, counters := store.GetAllMetrics()
 
@@ -159,7 +193,37 @@ func saveMetrics(store *storage.MetricsStorage, path string) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0o644)
+	// Write to a temp file in the same directory, then rename atomically.
+	tmp, err := os.CreateTemp(dirOf(path), "metrics-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
+}
+
+func dirOf(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' || path[i] == '\\' {
+			return path[:i]
+		}
+	}
+	return "."
 }
 
 func main() {
