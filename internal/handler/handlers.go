@@ -54,44 +54,36 @@ func (h *Handlers) PingHandler() http.HandlerFunc {
 }
 
 func (h *Handlers) valueMetricJSONHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ID    string `json:"id"`
-		MType string `json:"type"`
-	}
-
+	var req model.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	switch req.MType {
-	case "gauge":
+	case model.TypeGauge:
 		value, err := h.storage.GetGauge(req.ID)
 		if err != nil {
 			http.Error(w, "Metric not found", http.StatusNotFound)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":    req.ID,
-			"type":  "gauge",
-			"value": value,
-		})
+		req.Value = &value
 
-	case "counter":
+	case model.TypeCounter:
 		value, err := h.storage.GetCounter(req.ID)
 		if err != nil {
 			http.Error(w, "Metric not found", http.StatusNotFound)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":    req.ID,
-			"type":  "counter",
-			"delta": value,
-		})
+		req.Delta = &value
 
 	default:
 		http.Error(w, "Invalid metric type", http.StatusBadRequest)
+		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(req)
 }
 
 func decodeBody(r *http.Request, v interface{}) error {
@@ -140,25 +132,31 @@ func (h *Handlers) updateMetricJSONHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	switch metric.MType {
-	case "gauge":
+	case model.TypeGauge:
 		if metric.Value == nil {
 			http.Error(w, "Missing value for gauge", http.StatusBadRequest)
 			return
 		}
 		h.storage.UpdateGauge(metric.ID, *metric.Value)
-	case "counter":
+		val, _ := h.storage.GetGauge(metric.ID)
+		metric.Value = &val
+
+	case model.TypeCounter:
 		if metric.Delta == nil {
 			http.Error(w, "Missing delta for counter", http.StatusBadRequest)
 			return
 		}
 		h.storage.UpdateCounter(metric.ID, *metric.Delta)
+		delta, _ := h.storage.GetCounter(metric.ID)
+		metric.Delta = &delta
+
 	default:
 		http.Error(w, "Invalid metric type", http.StatusBadRequest)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	json.NewEncoder(w).Encode(metric)
 }
 
 func (h *Handlers) updateHandlerChi(w http.ResponseWriter, r *http.Request) {
