@@ -32,5 +32,6 @@ logs/*
 
 # Increment notes
 increment*.md
+!increment10.md
 /agent
 /server
