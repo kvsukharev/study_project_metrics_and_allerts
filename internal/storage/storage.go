@@ -32,15 +32,18 @@ type MetricsStorage struct {
 }
 
 func (m *MetricsStorage) BatchUpdate(ctx context.Context, metrics []model.Metrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	for _, metric := range metrics {
 		switch metric.MType {
 		case model.TypeGauge:
 			if metric.Value != nil {
-				m.UpdateGauge(metric.ID, *metric.Value)
+				m.gauges[metric.ID] = *metric.Value
 			}
 		case model.TypeCounter:
 			if metric.Delta != nil {
-				m.UpdateCounter(metric.ID, *metric.Delta)
+				m.counters[metric.ID] += *metric.Delta
 			}
 		default:
 			return fmt.Errorf("unknown metric type: %s", metric.MType)

@@ -52,6 +52,36 @@ func (s *Sender) SendAllMetrics(gauges map[string]float64, counters map[string]i
 	return nil
 }
 
+func (s *Sender) SendBatch(metrics []model.Metrics) error {
+	if len(metrics) == 0 {
+		return nil
+	}
+
+	body, err := json.Marshal(metrics)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	compressed := Compress(body)
+	req, err := http.NewRequest("POST", s.baseURL+"/updates", bytes.NewReader(compressed))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (s *Sender) sendJSON(m model.Metrics) error {
 	body, err := json.Marshal(m)
 	if err != nil {
