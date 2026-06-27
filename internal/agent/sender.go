@@ -56,30 +56,14 @@ func (s *Sender) SendBatch(metrics []model.Metrics) error {
 	if len(metrics) == 0 {
 		return nil
 	}
-
 	body, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-
 	compressed := Compress(body)
-	req, err := http.NewRequest("POST", s.baseURL+"/updates", bytes.NewReader(compressed))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
-	}
-	return nil
+	return retryOnConnErr(func() error {
+		return s.postCompressed("/updates", compressed)
+	})
 }
 
 func (s *Sender) sendJSON(m model.Metrics) error {
@@ -87,9 +71,16 @@ func (s *Sender) sendJSON(m model.Metrics) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-
 	compressed := Compress(body)
-	req, err := http.NewRequest("POST", s.baseURL+"/update", bytes.NewReader(compressed))
+	return retryOnConnErr(func() error {
+		return s.postCompressed("/update", compressed)
+	})
+}
+
+// postCompressed отправляет gzip-сжатый JSON на указанный путь.
+// Принимает уже сжатые байты, чтобы retry мог переиспользовать тело запроса.
+func (s *Sender) postCompressed(path string, compressed []byte) error {
+	req, err := http.NewRequest("POST", s.baseURL+path, bytes.NewReader(compressed))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -98,12 +89,12 @@ func (s *Sender) sendJSON(m model.Metrics) error {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d for %s/%s", resp.StatusCode, m.MType, m.ID)
+		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return nil
 }

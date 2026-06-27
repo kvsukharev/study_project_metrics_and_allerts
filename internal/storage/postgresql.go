@@ -156,16 +156,10 @@ func (p *PostgresStorage) GetAllMetrics() (map[string]float64, map[string]int64)
 }
 
 func (p *PostgresStorage) BatchUpdate(ctx context.Context, metrics []model.Metrics) error {
-	delays := []time.Duration{1, 3, 5}
-	for attempt := 0; attempt <= len(delays); attempt++ {
-		err := p.batchUpdateTx(ctx, metrics)
-		if err == nil {
-			return nil
-		}
-		if !isRetriableDBError(err) || attempt == len(delays) {
-			return fmt.Errorf("batch update: %w", err)
-		}
-		time.Sleep(delays[attempt] * time.Second)
+	if err := withRetry(func() error {
+		return p.batchUpdateTx(ctx, metrics)
+	}); err != nil {
+		return fmt.Errorf("batch update: %w", err)
 	}
 	return nil
 }
@@ -224,11 +218,15 @@ func withRetry(fn func() error) error {
 func isRetriableDBError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
+		// Class 08 — Connection Exception (all codes starting with "08")
 		switch pgErr.Code {
 		case pgerrcode.ConnectionException,
+			pgerrcode.SQLClientUnableToEstablishSQLConnection,
 			pgerrcode.ConnectionDoesNotExist,
+			pgerrcode.SQLServerRejectedEstablishmentOfSQLConnection,
 			pgerrcode.ConnectionFailure,
-			pgerrcode.SQLClientUnableToEstablishSQLConnection:
+			pgerrcode.TransactionResolutionUnknown,
+			pgerrcode.ProtocolViolation:
 			return true
 		}
 	}
