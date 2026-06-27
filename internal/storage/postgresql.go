@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"log"
@@ -10,8 +11,13 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
+	"github.com/pressly/goose/v3"
 )
+
+//go:embed migrations
+var migrationsFS embed.FS
 
 type PostgresStorage struct {
 	pool *pgxpool.Pool
@@ -26,26 +32,27 @@ func NewPostgresStorage(ctx context.Context, dsn string) (*PostgresStorage, erro
 		pool.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
-	s := &PostgresStorage{pool: pool}
-	if err := s.createTables(ctx); err != nil {
+	if err := runMigrations(pool); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("create tables: %w", err)
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
-	return s, nil
+	return &PostgresStorage{pool: pool}, nil
 }
 
-func (p *PostgresStorage) createTables(ctx context.Context) error {
-	_, err := p.pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS gauges (
-			name VARCHAR(255) PRIMARY KEY,
-			value DOUBLE PRECISION NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS counters (
-			name VARCHAR(255) PRIMARY KEY,
-			value BIGINT NOT NULL DEFAULT 0
-		);
-	`)
-	return err
+func runMigrations(pool *pgxpool.Pool) error {
+	db := stdlib.OpenDBFromPool(pool)
+	defer db.Close()
+
+	goose.SetBaseFS(migrationsFS)
+	goose.SetLogger(goose.NopLogger())
+
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("set dialect: %w", err)
+	}
+	if err := goose.Up(db, "migrations"); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	return nil
 }
 
 func (p *PostgresStorage) Ping(ctx context.Context) error {
