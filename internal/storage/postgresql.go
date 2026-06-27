@@ -6,14 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
-	"github.com/pressly/goose/v3"
 )
 
 //go:embed migrations
@@ -32,24 +34,35 @@ func NewPostgresStorage(ctx context.Context, dsn string) (*PostgresStorage, erro
 		pool.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
-	if err := runMigrations(pool); err != nil {
+	if err := runMigrations(dsn); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 	return &PostgresStorage{pool: pool}, nil
 }
 
-func runMigrations(pool *pgxpool.Pool) error {
-	db := stdlib.OpenDBFromPool(pool)
-	defer db.Close()
-
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-
-	if err := goose.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("set dialect: %w", err)
+func runMigrations(dsn string) error {
+	d, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("create iofs source: %w", err)
 	}
-	if err := goose.Up(db, "migrations"); err != nil {
+
+	// golang-migrate pgx/v5 driver requires pgx5:// scheme
+	migrateDSN := dsn
+	for _, prefix := range []string{"postgres://", "postgresql://"} {
+		if strings.HasPrefix(dsn, prefix) {
+			migrateDSN = "pgx5://" + dsn[len(prefix):]
+			break
+		}
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", d, migrateDSN)
+	if err != nil {
+		return fmt.Errorf("create migrate instance: %w", err)
+	}
+	defer m.Close()
+
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 	return nil
