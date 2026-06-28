@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -54,7 +55,7 @@ func TestSendGauge(t *testing.T) {
 	defer server.Close()
 
 	sender := agent.NewSender(server.URL)
-	if err := sender.SendGauge("testGauge", 3.14); err != nil {
+	if err := sender.SendGauge(context.Background(), "testGauge", 3.14); err != nil {
 		t.Errorf("SendGauge() failed: %v", err)
 	}
 }
@@ -79,7 +80,7 @@ func TestSendCounter(t *testing.T) {
 	defer server.Close()
 
 	sender := agent.NewSender(server.URL)
-	if err := sender.SendCounter("testCounter", 42); err != nil {
+	if err := sender.SendCounter(context.Background(), "testCounter", 42); err != nil {
 		t.Errorf("SendCounter() failed: %v", err)
 	}
 }
@@ -104,7 +105,7 @@ func TestSendAllMetrics(t *testing.T) {
 	gauges := map[string]float64{"gauge1": 1.23, "gauge2": 4.56}
 	counters := map[string]int64{"counter1": 10, "counter2": 20}
 
-	if err := sender.SendAllMetrics(gauges, counters); err != nil {
+	if err := sender.SendAllMetrics(context.Background(), gauges, counters); err != nil {
 		t.Errorf("SendAllMetrics() failed: %v", err)
 	}
 
@@ -137,7 +138,7 @@ func TestSendMetricServerError(t *testing.T) {
 	defer server.Close()
 
 	sender := agent.NewSender(server.URL)
-	err := sender.SendGauge("testGauge", 1.0)
+	err := sender.SendGauge(context.Background(), "testGauge", 1.0)
 
 	if err == nil {
 		t.Error("Expected error for server error response, got nil")

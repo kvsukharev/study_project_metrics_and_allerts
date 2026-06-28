@@ -78,7 +78,7 @@ func (p *PostgresStorage) Close() error {
 }
 
 func (p *PostgresStorage) UpdateGauge(name string, value float64) {
-	err := withRetry(func() error {
+	err := withRetry(context.Background(), func() error {
 		_, err := p.pool.Exec(context.Background(),
 			`INSERT INTO gauges (name, value) VALUES ($1, $2)
 			ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`,
@@ -91,7 +91,7 @@ func (p *PostgresStorage) UpdateGauge(name string, value float64) {
 }
 
 func (p *PostgresStorage) UpdateCounter(name string, value int64) {
-	err := withRetry(func() error {
+	err := withRetry(context.Background(), func() error {
 		_, err := p.pool.Exec(context.Background(),
 			`INSERT INTO counters (name, value) VALUES ($1, $2)
 			ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`,
@@ -129,25 +129,39 @@ func (p *PostgresStorage) GetAllMetrics() (map[string]float64, map[string]int64)
 	counters := make(map[string]int64)
 
 	rows, err := p.pool.Query(ctx, "SELECT name, value FROM gauges")
-	if err == nil {
+	if err != nil {
+		log.Printf("GetAllMetrics: query gauges: %v", err)
+	} else {
 		for rows.Next() {
 			var name string
 			var value float64
-			if rows.Scan(&name, &value) == nil {
-				gauges[name] = value
+			if err := rows.Scan(&name, &value); err != nil {
+				log.Printf("GetAllMetrics: scan gauge: %v", err)
+				continue
 			}
+			gauges[name] = value
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("GetAllMetrics: iterate gauges: %v", err)
 		}
 		rows.Close()
 	}
 
 	rows, err = p.pool.Query(ctx, "SELECT name, value FROM counters")
-	if err == nil {
+	if err != nil {
+		log.Printf("GetAllMetrics: query counters: %v", err)
+	} else {
 		for rows.Next() {
 			var name string
 			var value int64
-			if rows.Scan(&name, &value) == nil {
-				counters[name] = value
+			if err := rows.Scan(&name, &value); err != nil {
+				log.Printf("GetAllMetrics: scan counter: %v", err)
+				continue
 			}
+			counters[name] = value
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("GetAllMetrics: iterate counters: %v", err)
 		}
 		rows.Close()
 	}
@@ -156,7 +170,7 @@ func (p *PostgresStorage) GetAllMetrics() (map[string]float64, map[string]int64)
 }
 
 func (p *PostgresStorage) BatchUpdate(ctx context.Context, metrics []model.Metrics) error {
-	if err := withRetry(func() error {
+	if err := withRetry(ctx, func() error {
 		return p.batchUpdateTx(ctx, metrics)
 	}); err != nil {
 		return fmt.Errorf("batch update: %w", err)
@@ -200,8 +214,8 @@ func (p *PostgresStorage) batchUpdateTx(ctx context.Context, metrics []model.Met
 	return tx.Commit(ctx)
 }
 
-func withRetry(fn func() error) error {
-	delays := []time.Duration{1, 3, 5}
+func withRetry(ctx context.Context, fn func() error) error {
+	delays := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
 	for attempt := 0; attempt <= len(delays); attempt++ {
 		err := fn()
 		if err == nil {
@@ -210,7 +224,11 @@ func withRetry(fn func() error) error {
 		if !isRetriableDBError(err) || attempt == len(delays) {
 			return err
 		}
-		time.Sleep(delays[attempt] * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delays[attempt]):
+		}
 	}
 	return nil
 }

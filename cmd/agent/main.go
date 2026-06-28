@@ -119,7 +119,7 @@ func run() error {
 					continue
 				}
 				log.Info().Str("server_url", serverURL).Int("count", len(metrics)).Msg("Sending metrics batch")
-				if err := sender.SendBatch(metrics); err != nil {
+				if err := sender.SendBatch(ctx, metrics); err != nil {
 					log.Info().Msgf("Failed to send metrics batch: %v", err)
 				} else {
 					log.Info().Msg("Successfully sent metrics batch")
