@@ -67,28 +67,42 @@ func run() error {
 	}
 	defer logger.Sync()
 
-	mem := storage.NewMemStorage()
-
-	if cfg.Restore && cfg.FileStoragePath != "" {
-		if err := loadMetrics(mem, cfg.FileStoragePath); err != nil {
-			log.Printf("Warning: failed to restore metrics from %s: %v", cfg.FileStoragePath, err)
-		} else {
-			log.Printf("Metrics restored from %s", cfg.FileStoragePath)
-		}
-	}
-
-	var store storage.Storage
-	if cfg.FileStoragePath != "" && cfg.StoreIntervalSec == 0 {
-		store = &syncStorage{MetricsStorage: mem, path: cfg.FileStoragePath}
-	} else {
-		store = mem
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Periodic save goroutine — listens to context for graceful shutdown.
-	if cfg.FileStoragePath != "" && cfg.StoreIntervalSec > 0 {
+	var (
+		store storage.Storage
+		mem   *storage.MetricsStorage
+	)
+
+	if cfg.DatabaseDSN != "" {
+		pgStore, err := storage.NewPostgresStorage(ctx, cfg.DatabaseDSN)
+		if err != nil {
+			return fmt.Errorf("connect to database: %w", err)
+		}
+		defer pgStore.Close()
+		store = pgStore
+		log.Printf("Using PostgreSQL storage")
+	} else {
+		mem = storage.NewMemStorage()
+
+		if cfg.Restore && cfg.FileStoragePath != "" {
+			if err := loadMetrics(mem, cfg.FileStoragePath); err != nil {
+				log.Printf("Warning: failed to restore metrics from %s: %v", cfg.FileStoragePath, err)
+			} else {
+				log.Printf("Metrics restored from %s", cfg.FileStoragePath)
+			}
+		}
+
+		if cfg.FileStoragePath != "" && cfg.StoreIntervalSec == 0 {
+			store = &syncStorage{MetricsStorage: mem, path: cfg.FileStoragePath}
+		} else {
+			store = mem
+		}
+	}
+
+	// Periodic save goroutine — only for file-based storage.
+	if mem != nil && cfg.FileStoragePath != "" && cfg.StoreIntervalSec > 0 {
 		interval := time.Duration(cfg.StoreIntervalSec) * time.Second
 		go func() {
 			ticker := time.NewTicker(interval)
@@ -132,8 +146,8 @@ func run() error {
 		return err
 	}
 
-	// Final snapshot on shutdown.
-	if cfg.FileStoragePath != "" {
+	// Final snapshot on shutdown — only for file-based storage.
+	if mem != nil && cfg.FileStoragePath != "" {
 		if err := saveMetrics(mem, cfg.FileStoragePath); err != nil {
 			log.Printf("Failed to save final snapshot: %v", err)
 		} else {

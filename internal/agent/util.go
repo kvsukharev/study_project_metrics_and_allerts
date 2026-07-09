@@ -3,10 +3,39 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net"
+	"time"
 )
+
+var retryDelays = []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+
+// retryOnConnErr повторяет fn до 3 раз с интервалами 1s/3s/5s при сетевых ошибках соединения.
+// Отменяется при завершении ctx.
+func retryOnConnErr(ctx context.Context, fn func() error) error {
+	err := fn()
+	for _, delay := range retryDelays {
+		if err == nil || !isRetriableNetError(err) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		err = fn()
+	}
+	return err
+}
+
+func isRetriableNetError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
 
 func Compress(data []byte) []byte {
 	var buf bytes.Buffer

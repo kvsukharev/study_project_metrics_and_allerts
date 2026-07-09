@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,44 +23,65 @@ func NewSender(baseURL string) *Sender {
 	}
 }
 
-func (s *Sender) SendGauge(name string, value float64) error {
-	return s.sendJSON(model.Metrics{
+func (s *Sender) SendGauge(ctx context.Context, name string, value float64) error {
+	return s.sendJSON(ctx, model.Metrics{
 		ID:    name,
 		MType: model.TypeGauge,
 		Value: &value,
 	})
 }
 
-func (s *Sender) SendCounter(name string, value int64) error {
-	return s.sendJSON(model.Metrics{
+func (s *Sender) SendCounter(ctx context.Context, name string, value int64) error {
+	return s.sendJSON(ctx, model.Metrics{
 		ID:    name,
 		MType: model.TypeCounter,
 		Delta: &value,
 	})
 }
 
-func (s *Sender) SendAllMetrics(gauges map[string]float64, counters map[string]int64) error {
+func (s *Sender) SendAllMetrics(ctx context.Context, gauges map[string]float64, counters map[string]int64) error {
 	for name, value := range gauges {
-		if err := s.SendGauge(name, value); err != nil {
+		if err := s.SendGauge(ctx, name, value); err != nil {
 			return fmt.Errorf("failed to send gauge %s: %w", name, err)
 		}
 	}
 	for name, value := range counters {
-		if err := s.SendCounter(name, value); err != nil {
+		if err := s.SendCounter(ctx, name, value); err != nil {
 			return fmt.Errorf("failed to send counter %s: %w", name, err)
 		}
 	}
 	return nil
 }
 
-func (s *Sender) sendJSON(m model.Metrics) error {
+func (s *Sender) SendBatch(ctx context.Context, metrics []model.Metrics) error {
+	if len(metrics) == 0 {
+		return nil
+	}
+	body, err := json.Marshal(metrics)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	compressed := Compress(body)
+	return retryOnConnErr(ctx, func() error {
+		return s.postCompressed("/updates", compressed)
+	})
+}
+
+func (s *Sender) sendJSON(ctx context.Context, m model.Metrics) error {
 	body, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-
 	compressed := Compress(body)
-	req, err := http.NewRequest("POST", s.baseURL+"/update", bytes.NewReader(compressed))
+	return retryOnConnErr(ctx, func() error {
+		return s.postCompressed("/update", compressed)
+	})
+}
+
+// postCompressed отправляет gzip-сжатый JSON на указанный путь.
+// Принимает уже сжатые байты, чтобы retry мог переиспользовать тело запроса.
+func (s *Sender) postCompressed(path string, compressed []byte) error {
+	req, err := http.NewRequest("POST", s.baseURL+path, bytes.NewReader(compressed))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -68,12 +90,12 @@ func (s *Sender) sendJSON(m model.Metrics) error {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d for %s/%s", resp.StatusCode, m.MType, m.ID)
+		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return nil
 }

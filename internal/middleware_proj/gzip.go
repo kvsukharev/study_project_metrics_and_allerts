@@ -64,6 +64,7 @@ func GzipMiddleware(next http.Handler) http.Handler {
 			}
 			defer gz.Close()
 			r.Body = io.NopCloser(gz)
+			r.Header.Del("Content-Encoding")
 		}
 
 		clientGzip := strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")

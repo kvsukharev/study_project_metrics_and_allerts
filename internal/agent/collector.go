@@ -101,6 +101,31 @@ func (c *Collector) GetCounters() map[string]int64 {
 	return result
 }
 
+// GetAllMetrics возвращает все метрики за одну блокировку (без race condition между gauge и counter).
+func (c *Collector) GetAllMetrics() []model.Metrics {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	metrics := make([]model.Metrics, 0, len(c.gauge)+len(c.counter))
+	for name, value := range c.gauge {
+		v := value
+		metrics = append(metrics, model.Metrics{
+			ID:    name,
+			MType: model.TypeGauge,
+			Value: &v,
+		})
+	}
+	for name, delta := range c.counter {
+		d := delta
+		metrics = append(metrics, model.Metrics{
+			ID:    name,
+			MType: model.TypeCounter,
+			Delta: &d,
+		})
+	}
+	return metrics
+}
+
 // GetMetricsCount возвращает количество метрик
 func (c *Collector) GetMetricsCount() (int, int) {
 	c.mu.Lock()

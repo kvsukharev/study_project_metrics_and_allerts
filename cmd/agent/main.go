@@ -113,17 +113,16 @@ func run() error {
 				log.Info().Msg("Stopping metrics reporting...")
 				return
 			case <-ticker.C:
-				gauges := collector.GetGauges()
-				counters := collector.GetCounters()
-				if len(gauges) == 0 && len(counters) == 0 {
+				metrics := collector.GetAllMetrics()
+				if len(metrics) == 0 {
 					log.Info().Msg("No metrics to send")
 					continue
 				}
-				log.Info().Str("server_url", serverURL).Msg("Sending metrics")
-				if err := sender.SendAllMetrics(gauges, counters); err != nil {
-					log.Info().Msgf("Failed to send metrics: %v", err)
+				log.Info().Str("server_url", serverURL).Int("count", len(metrics)).Msg("Sending metrics batch")
+				if err := sender.SendBatch(ctx, metrics); err != nil {
+					log.Info().Msgf("Failed to send metrics batch: %v", err)
 				} else {
-					log.Info().Msg("Successfully sent all metrics")
+					log.Info().Msg("Successfully sent metrics batch")
 				}
 			}
 		}
