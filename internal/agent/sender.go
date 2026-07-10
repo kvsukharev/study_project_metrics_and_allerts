@@ -14,12 +14,14 @@ import (
 type Sender struct {
 	client  *http.Client
 	baseURL string
+	key     string
 }
 
-func NewSender(baseURL string) *Sender {
+func NewSender(baseURL, key string) *Sender {
 	return &Sender{
 		client:  &http.Client{Timeout: 10 * time.Second},
 		baseURL: baseURL,
+		key:     key,
 	}
 }
 
@@ -63,7 +65,7 @@ func (s *Sender) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	}
 	compressed := Compress(body)
 	return retryOnConnErr(ctx, func() error {
-		return s.postCompressed("/updates", compressed)
+		return s.postCompressed("/updates", body, compressed)
 	})
 }
 
@@ -74,19 +76,21 @@ func (s *Sender) sendJSON(ctx context.Context, m model.Metrics) error {
 	}
 	compressed := Compress(body)
 	return retryOnConnErr(ctx, func() error {
-		return s.postCompressed("/update", compressed)
+		return s.postCompressed("/update", body, compressed)
 	})
 }
 
 // postCompressed отправляет gzip-сжатый JSON на указанный путь.
-// Принимает уже сжатые байты, чтобы retry мог переиспользовать тело запроса.
-func (s *Sender) postCompressed(path string, compressed []byte) error {
+// body — исходные (несжатые) байты для вычисления хеша.
+// compressed — сжатые байты для тела запроса.
+func (s *Sender) postCompressed(path string, body, compressed []byte) error {
 	req, err := http.NewRequest("POST", s.baseURL+path, bytes.NewReader(compressed))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+	addHashHeader(req, body, s.key)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -104,6 +108,5 @@ func addHashHeader(req *http.Request, body []byte, key string) {
 	if key == "" {
 		return
 	}
-	hash := ComputeHMAC(body, key)
-	req.Header.Set("HashSHA256", hash)
+	req.Header.Set("HashSHA256", ComputeHMAC(body, key))
 }

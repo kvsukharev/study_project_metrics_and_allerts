@@ -29,6 +29,7 @@ type AgentConfig struct {
 	Address        string `env:"ADDRESS"`
 	PollInterval   int    `env:"POLL_INTERVAL"`   // seconds
 	ReportInterval int    `env:"REPORT_INTERVAL"` // seconds
+	Key            string `env:"KEY"`
 }
 
 const (
@@ -73,7 +74,7 @@ func run() error {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	collector := agent.NewCollector(100, client, serverURL)
-	sender := agent.NewSender(serverURL)
+	sender := agent.NewSender(serverURL, cfg.Key)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -178,6 +179,7 @@ func parseFlags(cfg *AgentConfig) error {
 	flag.StringVar(&cfg.Address, "a", defaultServerAddress, "HTTP server endpoint address")
 	flag.IntVar(&cfg.PollInterval, "p", defaultPollInterval, "Poll interval in seconds")
 	flag.IntVar(&cfg.ReportInterval, "r", defaultReportInterval, "Report interval in seconds")
+	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC SHA256 signing")
 
 	flag.Parse()
 

@@ -15,7 +15,7 @@ import (
 
 func newRouter() *chi.Mux {
 	store := storage.NewMemStorage()
-	h := handlers.NewHandlers(store)
+	h := handlers.NewHandlers(store, "")
 	r := chi.NewRouter()
 	h.RegisterRoutes(r)
 	return r

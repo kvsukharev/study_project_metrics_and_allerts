@@ -120,7 +120,7 @@ func run() error {
 		}()
 	}
 
-	h := handlers.NewHandlers(store)
+	h := handlers.NewHandlers(store, cfg.Key)
 
 	r := chi.NewRouter()
 	r.Use(middleware.StripSlashes)
