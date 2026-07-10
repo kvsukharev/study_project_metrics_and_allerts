@@ -322,11 +322,12 @@ func NewSHA256CheckMiddleware(key string) func(next http.Handler) http.Handler {
 			r.Body.Close()
 
 			gotHash := r.Header.Get("HashSHA256")
-			expectedHash := agent.ComputeHMAC(bodyBytes, key)
-
-			if !hmac.Equal([]byte(expectedHash), []byte(gotHash)) {
-				http.Error(w, "invalid hash", http.StatusBadRequest)
-				return
+			if gotHash != "" {
+				expectedHash := agent.ComputeHMAC(bodyBytes, key)
+				if !hmac.Equal([]byte(expectedHash), []byte(gotHash)) {
+					http.Error(w, "invalid hash", http.StatusBadRequest)
+					return
+				}
 			}
 
 			// Вернуть тело для следующего обработчика
