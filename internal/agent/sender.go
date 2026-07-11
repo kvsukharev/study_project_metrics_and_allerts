@@ -69,6 +69,10 @@ func (s *Sender) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	})
 }
 
+func (s *Sender) SendMetric(ctx context.Context, m model.Metrics) error {
+	return s.sendJSON(ctx, m)
+}
+
 func (s *Sender) sendJSON(ctx context.Context, m model.Metrics) error {
 	body, err := json.Marshal(m)
 	if err != nil {
