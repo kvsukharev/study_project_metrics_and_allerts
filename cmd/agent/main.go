@@ -158,29 +158,18 @@ func run() error {
 		}
 	}()
 
-	// Worker pool: cfg.RateLimit параллельных горутин-отправителей
+	// Worker pool: cfg.RateLimit параллельных горутин-отправителей.
+	// Читают из jobs до закрытия канала; ctx передаётся в SendMetric для отмены запроса.
 	for i := 0; i < cfg.RateLimit; i++ {
 		wg.Add(1)
-		go func(workerID int) {
+		go func() {
 			defer wg.Done()
-			for {
-				select {
-				case m, ok := <-jobs:
-					if !ok {
-						return
-					}
-					if err := sender.SendMetric(ctx, m); err != nil {
-						log.Info().Err(err).Str("metric", m.ID).Msg("Failed to send metric")
-					}
-				case <-ctx.Done():
-					// вычитываем оставшиеся задания до закрытия канала
-					for m := range jobs {
-						_ = m
-					}
-					return
+			for m := range jobs {
+				if err := sender.SendMetric(ctx, m); err != nil {
+					log.Info().Err(err).Str("metric", m.ID).Msg("Failed to send metric")
 				}
 			}
-		}(i)
+		}()
 	}
 
 	log.Info().Int("workers", cfg.RateLimit).Msg("Agent is running. Press Ctrl+C to stop.")

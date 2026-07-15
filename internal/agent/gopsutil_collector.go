@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -9,7 +10,10 @@ import (
 
 // UpdateGopsutilMetrics collects TotalMemory, FreeMemory and per-CPU utilization.
 func (c *Collector) UpdateGopsutilMetrics() {
-	if vmStat, err := mem.VirtualMemory(); err == nil {
+	vmStat, err := mem.VirtualMemory()
+	if err != nil {
+		log.Printf("gopsutil: VirtualMemory: %v", err)
+	} else {
 		c.mu.Lock()
 		c.gauge["TotalMemory"] = float64(vmStat.Total)
 		c.gauge["FreeMemory"] = float64(vmStat.Free)
@@ -17,7 +21,10 @@ func (c *Collector) UpdateGopsutilMetrics() {
 	}
 
 	// interval=0 → utilization since last call (non-blocking)
-	if percs, err := cpu.Percent(0, true); err == nil {
+	percs, err := cpu.Percent(0, true)
+	if err != nil {
+		log.Printf("gopsutil: cpu.Percent: %v", err)
+	} else {
 		c.mu.Lock()
 		for i, p := range percs {
 			c.gauge[fmt.Sprintf("CPUutilization%d", i+1)] = p
