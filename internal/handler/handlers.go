@@ -21,10 +21,11 @@ import (
 
 type Handlers struct {
 	storage storage.Storage
+	key     string
 }
 
-func NewHandlers(storage storage.Storage) *Handlers {
-	return &Handlers{storage: storage}
+func NewHandlers(storage storage.Storage, key string) *Handlers {
+	return &Handlers{storage: storage, key: key}
 }
 
 func (h *Handlers) RegisterRoutes(r chi.Router) {
@@ -82,8 +83,13 @@ func (h *Handlers) valueMetricJSONHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	body, err := json.Marshal(req)
+	if err != nil {
+		http.Error(w, "marshal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(req)
+	writeSignedResponse(w, body, h.key)
 }
 
 func decodeBody(r *http.Request, v interface{}) error {
@@ -155,8 +161,13 @@ func (h *Handlers) updateMetricJSONHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	body, err := json.Marshal(metric)
+	if err != nil {
+		http.Error(w, "marshal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(metric)
+	writeSignedResponse(w, body, h.key)
 }
 
 func (h *Handlers) updateHandlerChi(w http.ResponseWriter, r *http.Request) {
@@ -312,7 +323,6 @@ func NewSHA256CheckMiddleware(key string) func(next http.Handler) http.Handler {
 
 			gotHash := r.Header.Get("HashSHA256")
 			expectedHash := agent.ComputeHMAC(bodyBytes, key)
-
 			if !hmac.Equal([]byte(expectedHash), []byte(gotHash)) {
 				http.Error(w, "invalid hash", http.StatusBadRequest)
 				return

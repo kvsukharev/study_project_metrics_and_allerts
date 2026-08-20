@@ -14,12 +14,14 @@ import (
 type Sender struct {
 	client  *http.Client
 	baseURL string
+	key     string
 }
 
-func NewSender(baseURL string) *Sender {
+func NewSender(baseURL, key string) *Sender {
 	return &Sender{
 		client:  &http.Client{Timeout: 10 * time.Second},
 		baseURL: baseURL,
+		key:     key,
 	}
 }
 
@@ -61,10 +63,13 @@ func (s *Sender) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	compressed := Compress(body)
 	return retryOnConnErr(ctx, func() error {
-		return s.postCompressed("/updates", compressed)
+		return s.post("/updates", body)
 	})
+}
+
+func (s *Sender) SendMetric(ctx context.Context, m model.Metrics) error {
+	return s.sendJSON(ctx, m)
 }
 
 func (s *Sender) sendJSON(ctx context.Context, m model.Metrics) error {
@@ -72,21 +77,23 @@ func (s *Sender) sendJSON(ctx context.Context, m model.Metrics) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	compressed := Compress(body)
 	return retryOnConnErr(ctx, func() error {
-		return s.postCompressed("/update", compressed)
+		return s.post("/update", body)
 	})
 }
 
-// postCompressed отправляет gzip-сжатый JSON на указанный путь.
-// Принимает уже сжатые байты, чтобы retry мог переиспользовать тело запроса.
-func (s *Sender) postCompressed(path string, compressed []byte) error {
+// post сжимает body, подписывает и отправляет на path.
+func (s *Sender) post(path string, body []byte) error {
+	compressed := Compress(body)
 	req, err := http.NewRequest("POST", s.baseURL+path, bytes.NewReader(compressed))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+	if s.key != "" {
+		req.Header.Set("HashSHA256", ComputeHMAC(body, s.key))
+	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -98,12 +105,4 @@ func (s *Sender) postCompressed(path string, compressed []byte) error {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return nil
-}
-
-func addHashHeader(req *http.Request, body []byte, key string) {
-	if key == "" {
-		return
-	}
-	hash := ComputeHMAC(body, key)
-	req.Header.Set("HashSHA256", hash)
 }

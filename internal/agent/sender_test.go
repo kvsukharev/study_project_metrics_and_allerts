@@ -23,7 +23,7 @@ func decodeGzipJSON(r *http.Request, v interface{}) error {
 }
 
 func TestNewSender(t *testing.T) {
-	sender := agent.NewSender("http://localhost:8080")
+	sender := agent.NewSender("http://localhost:8080", "")
 	if sender == nil {
 		t.Fatal("NewSender() returned nil")
 	}
@@ -54,7 +54,7 @@ func TestSendGauge(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := agent.NewSender(server.URL)
+	sender := agent.NewSender(server.URL, "")
 	if err := sender.SendGauge(context.Background(), "testGauge", 3.14); err != nil {
 		t.Errorf("SendGauge() failed: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestSendCounter(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := agent.NewSender(server.URL)
+	sender := agent.NewSender(server.URL, "")
 	if err := sender.SendCounter(context.Background(), "testCounter", 42); err != nil {
 		t.Errorf("SendCounter() failed: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestSendAllMetrics(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := agent.NewSender(server.URL)
+	sender := agent.NewSender(server.URL, "")
 
 	gauges := map[string]float64{"gauge1": 1.23, "gauge2": 4.56}
 	counters := map[string]int64{"counter1": 10, "counter2": 20}
@@ -137,7 +137,7 @@ func TestSendMetricServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := agent.NewSender(server.URL)
+	sender := agent.NewSender(server.URL, "")
 	err := sender.SendGauge(context.Background(), "testGauge", 1.0)
 
 	if err == nil {
