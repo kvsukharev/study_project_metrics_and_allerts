@@ -15,6 +15,8 @@ type ServerConfig struct {
 	Restore          bool   `env:"RESTORE"`
 	DatabaseDSN      string `env:"DATABASE_DSN"`
 	RateLimit        int    `env:"RATE_LIMIT"`
+	AuditFile        string `env:"AUDIT_FILE"`
+	AuditURL         string `env:"AUDIT_URL"`
 }
 
 
@@ -34,6 +36,8 @@ func ParseFlags() (*ServerConfig, error) {
 	flag.IntVar(&cfg.StoreIntervalSec, "i", 300, "Store interval in seconds (0 = sync write)")
 	flag.StringVar(&cfg.FileStoragePath, "f", "metrics-db.json", "File storage path")
 	flag.BoolVar(&cfg.Restore, "r", false, "Restore metrics from file on start")
+	flag.StringVar(&cfg.AuditFile, "audit-file", "", "Audit log file path (empty = disabled)")
+	flag.StringVar(&cfg.AuditURL, "audit-url", "", "Audit remote URL (empty = disabled)")
 	flag.Parse()
 
 	if err := env.Parse(cfg); err != nil {

@@ -9,10 +9,13 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/audit"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
 
@@ -22,10 +25,46 @@ import (
 type Handlers struct {
 	storage storage.Storage
 	key     string
+	audit   *audit.Subject // nil when audit is disabled
 }
 
-func NewHandlers(storage storage.Storage, key string) *Handlers {
-	return &Handlers{storage: storage, key: key}
+func NewHandlers(storage storage.Storage, key string, auditSubject *audit.Subject) *Handlers {
+	return &Handlers{storage: storage, key: key, audit: auditSubject}
+}
+
+// extractIP returns the client IP from the request, preferring X-Real-IP and
+// X-Forwarded-For headers over RemoteAddr.
+func extractIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		if idx := len(fwd); idx > 0 {
+			// take the first address in a comma-separated list
+			for i := 0; i < len(fwd); i++ {
+				if fwd[i] == ',' {
+					return fwd[:i]
+				}
+			}
+			return fwd
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func (h *Handlers) notifyAudit(r *http.Request, metricNames []string) {
+	if h.audit == nil {
+		return
+	}
+	h.audit.Notify(audit.Event{
+		TS:        time.Now().Unix(),
+		Metrics:   metricNames,
+		IPAddress: extractIP(r),
+	})
 }
 
 func (h *Handlers) RegisterRoutes(r chi.Router) {
@@ -127,6 +166,12 @@ func (h *Handlers) BatchUpdateMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	names := make([]string, 0, len(metrics))
+	for _, m := range metrics {
+		names = append(names, m.ID)
+	}
+	h.notifyAudit(r, names)
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -166,6 +211,9 @@ func (h *Handlers) updateMetricJSONHandler(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "marshal error", http.StatusInternalServerError)
 		return
 	}
+
+	h.notifyAudit(r, []string{metric.ID})
+
 	w.Header().Set("Content-Type", "application/json")
 	writeSignedResponse(w, body, h.key)
 }
@@ -174,16 +222,19 @@ func (h *Handlers) updateHandlerChi(w http.ResponseWriter, r *http.Request) {
 	metricType := chi.URLParam(r, "type")
 	metricName := chi.URLParam(r, "name")
 	metricValue := chi.URLParam(r, "value")
-	h.updateMetric(w, metricType, metricName, metricValue)
+	if h.updateMetric(w, metricType, metricName, metricValue) {
+		h.notifyAudit(r, []string{metricName})
+	}
 }
 
-func (h *Handlers) updateMetric(w http.ResponseWriter, metricType, metricName, metricValue string) {
+// updateMetric applies the update and returns true on success.
+func (h *Handlers) updateMetric(w http.ResponseWriter, metricType, metricName, metricValue string) bool {
 	switch metricType {
 	case "gauge":
 		value, err := strconv.ParseFloat(metricValue, 64)
 		if err != nil {
 			http.Error(w, "Invalid gauge value", http.StatusBadRequest)
-			return
+			return false
 		}
 		h.storage.UpdateGauge(metricName, value)
 		log.Printf("Updated gauge %s = %.6f", metricName, value)
@@ -192,19 +243,20 @@ func (h *Handlers) updateMetric(w http.ResponseWriter, metricType, metricName, m
 		value, err := strconv.ParseInt(metricValue, 10, 64)
 		if err != nil {
 			http.Error(w, "Invalid counter value", http.StatusBadRequest)
-			return
+			return false
 		}
 		h.storage.UpdateCounter(metricName, value)
 		log.Printf("Updated counter %s (added %d)", metricName, value)
 
 	default:
 		http.Error(w, "Unknown metric type. Use 'gauge' or 'counter'", http.StatusBadRequest)
-		return
+		return false
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "OK\n")
+	return true
 }
 
 func (h *Handlers) valueHandler(w http.ResponseWriter, r *http.Request) {
