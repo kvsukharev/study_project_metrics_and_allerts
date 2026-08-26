@@ -1,5 +1,81 @@
 # go-musthave-metrics-tpl
 
+## Increment 17 — Benchmarks & Memory Profiling
+
+### Бенчмарки
+
+Бенчмарки добавлены для трёх ключевых пакетов:
+
+| Файл | Что измеряет |
+|---|---|
+| `internal/storage/storage_bench_test.go` | UpdateGauge, UpdateCounter, BatchUpdate, GetAllMetrics, GetGauge |
+| `internal/agent/agent_bench_test.go` | CollectorUpdateMetrics, GetAllMetrics, GetGauges, GetCounters, Compress, ComputeHMAC |
+| `internal/handler/handlers_bench_test.go` | BatchUpdate endpoint, UpdateJSON endpoint, GET /, UpdatePlainText endpoint |
+
+Запуск бенчмарков:
+```bash
+go test -bench=. -benchmem ./internal/storage/ ./internal/agent/ ./internal/handler/
+```
+
+### Анализ профиля памяти
+
+Профиль снят во время выполнения бенчмарков агента (`Compress` + `Collector`):
+
+```bash
+go test -run='^$' -bench='BenchmarkCompress|BenchmarkCollector' -benchtime=5s \
+  -memprofile=profiles/base.pprof ./internal/agent/
+```
+
+Топ аллокаторов (`go tool pprof -top profiles/base.pprof`):
+
+```
+flat  flat%   sum%        cum   cum%
+36414MB 57.42%         compress/flate.NewWriter   ← главная проблема
+ 8440MB 13.31%         agent.(*Collector).GetAllMetrics
+ 7575MB 11.95%         compress/flate.(*compressor).initDeflate
+ 5519MB  8.70%         agent.(*Collector).GetCounters  ← нет capacity hint
+ 4819MB  7.60%         agent.(*Collector).GetGauges    ← нет capacity hint
+```
+
+**Вывод:** `Compress()` создавал `gzip.Writer` (~32 KB внутренних буферов) заново при каждом вызове, что давало **~814 KB аллокаций за один вызов**. `GetGauges`/`GetCounters` не передавали capacity в `make()`, что вызывало rehash при росте map.
+
+### Оптимизации
+
+1. **`internal/agent/util.go` — `sync.Pool` для `gzip.Writer` и `bytes.Buffer`**
+   - `gzip.Writer` переиспользуется через `gzipWriterPool` вместо создания нового на каждый вызов
+   - `bytes.Buffer` переиспользуется через `compressBufPool`
+
+2. **`internal/agent/collector.go` — capacity hint в `GetGauges()` и `GetCounters()`**
+   - `make(map[string]float64, len(c.gauge))` — исключает rehash при копировании
+
+### Результат
+
+```bash
+go tool pprof -top -diff_base=profiles/base.pprof profiles/result.pprof
+```
+
+```
+      flat  flat%   sum%        cum   cum%
+  -35.56GB 57.41%         compress/flate.NewWriter
+   -7.40GB 11.94%         compress/flate.(*compressor).initDeflate
+   -0.85GB  1.37%         agent.(*Collector).GetCounters
+   -0.82GB  1.33%         agent.(*Collector).GetGauges
+   -0.39GB  0.63%         compress/flate.(*huffmanEncoder).generate
+```
+
+Все значения отрицательные — использование памяти снизилось.
+
+| Бенчмарк | До | После | Улучшение |
+|---|---|---|---|
+| `BenchmarkCompress` | 814 750 B/op, 21 allocs | 432 B/op, 1 alloc | **-99.9% памяти** |
+| `BenchmarkCompressSingle` | 814 111 B/op, 20 allocs | 80 B/op, 1 alloc | **-99.9% памяти** |
+| `BenchmarkCollectorGetGauges` | 1640 B/op, 7 allocs | 984 B/op, 4 allocs | **-40% памяти** |
+| `BenchmarkCollectorGetCounters` | 256 B/op, 2 allocs | 256 B/op, 2 allocs | без изменений |
+
+---
+
+
+
 Шаблон репозитория для трека «Сервер сбора метрик и алертинга».
 
 ## Начало работы

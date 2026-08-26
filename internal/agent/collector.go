@@ -82,7 +82,7 @@ func (c *Collector) GetGauges() map[string]float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	result := make(map[string]float64)
+	result := make(map[string]float64, len(c.gauge))
 	for k, v := range c.gauge {
 		result[k] = v
 	}
@@ -94,7 +94,7 @@ func (c *Collector) GetCounters() map[string]int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	result := make(map[string]int64)
+	result := make(map[string]int64, len(c.counter))
 	for k, v := range c.counter {
 		result[k] = v
 	}
