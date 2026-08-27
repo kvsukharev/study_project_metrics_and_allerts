@@ -19,7 +19,6 @@ type ServerConfig struct {
 	AuditURL         string `env:"AUDIT_URL"`
 }
 
-
 func ParseFlags() (*ServerConfig, error) {
 	cfg := &ServerConfig{
 		Address:          "localhost:8080",
@@ -50,4 +49,3 @@ func ParseFlags() (*ServerConfig, error) {
 
 	return cfg, nil
 }
-
