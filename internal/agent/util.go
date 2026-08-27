@@ -52,6 +52,8 @@ var (
 	}
 )
 
+// Compress gzip-compresses data and returns the compressed bytes.
+// gzip.Writer and bytes.Buffer are reused via sync.Pool to minimise allocations.
 func Compress(data []byte) []byte {
 	buf := compressBufPool.Get().(*bytes.Buffer)
 	buf.Reset()
@@ -69,6 +71,7 @@ func Compress(data []byte) []byte {
 	return result
 }
 
+// ComputeHMAC returns the hex-encoded HMAC-SHA256 of message signed with key.
 func ComputeHMAC(message []byte, key string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write(message)

@@ -1,3 +1,5 @@
+// Package handlers implements the HTTP handlers for the metrics server.
+// Routes are registered via Handlers.RegisterRoutes onto a chi.Router.
 package handlers
 
 import (
@@ -22,12 +24,17 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// Handlers groups all HTTP handler methods for the metrics server.
+// Create one with NewHandlers and register its routes via RegisterRoutes.
 type Handlers struct {
 	storage storage.Storage
 	key     string
 	audit   *audit.Subject // nil when audit is disabled
 }
 
+// NewHandlers creates a Handlers bound to the given storage backend.
+// key is the HMAC-SHA256 signing key; pass an empty string to disable signing.
+// auditSubject may be nil to disable audit logging.
 func NewHandlers(storage storage.Storage, key string, auditSubject *audit.Subject) *Handlers {
 	return &Handlers{storage: storage, key: key, audit: auditSubject}
 }
@@ -67,6 +74,15 @@ func (h *Handlers) notifyAudit(r *http.Request, metricNames []string) {
 	})
 }
 
+// RegisterRoutes mounts all metric endpoints onto r:
+//
+//	POST /update              – update a single metric via JSON body
+//	POST /updates             – batch-update metrics via JSON array
+//	POST /update/{type}/{name}/{value} – update a metric via URL path
+//	POST /value               – retrieve a metric value via JSON body
+//	GET  /value/{type}/{name} – retrieve a metric value via URL path
+//	GET  /                    – HTML dashboard with all current metrics
+//	GET  /ping                – liveness probe for the storage backend
 func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Post("/update", h.updateMetricJSONHandler)
 	r.Post("/value", h.valueMetricJSONHandler)
@@ -83,6 +99,8 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Get("/ping", h.PingHandler())
 }
 
+// PingHandler returns an http.HandlerFunc that checks storage connectivity.
+// Responds 200 OK when the backend is reachable, 500 otherwise.
 func (h *Handlers) PingHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h.storage.Ping(r.Context()); err != nil {
@@ -145,6 +163,9 @@ func decodeBody(r *http.Request, v interface{}) error {
 
 }
 
+// BatchUpdateMetrics handles POST /updates.
+// It accepts a JSON array of Metrics objects and applies them atomically.
+// On success it responds 200 OK and emits an audit event with all metric names.
 func (h *Handlers) BatchUpdateMetrics(w http.ResponseWriter, r *http.Request) {
 	var metrics []model.Metrics
 
@@ -358,6 +379,9 @@ func (h *Handlers) rootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// NewSHA256CheckMiddleware returns middleware that verifies the HashSHA256
+// request header against an HMAC-SHA256 of the request body using key.
+// If key is empty the middleware is a no-op and passes every request through.
 func NewSHA256CheckMiddleware(key string) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

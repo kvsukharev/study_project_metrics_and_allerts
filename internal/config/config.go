@@ -1,3 +1,5 @@
+// Package config parses server configuration from CLI flags and environment
+// variables. Environment variables take precedence over flags.
 package config
 
 import (
@@ -7,6 +9,8 @@ import (
 	"github.com/caarlos0/env/v6"
 )
 
+// ServerConfig holds all tunable parameters for the metrics server.
+// Fields are populated from CLI flags; environment variables override them.
 type ServerConfig struct {
 	Key              string `env:"KEY"`
 	Address          string `env:"ADDRESS"`
@@ -19,6 +23,8 @@ type ServerConfig struct {
 	AuditURL         string `env:"AUDIT_URL"`
 }
 
+// ParseFlags parses CLI flags and then overlays environment variables.
+// Returns an error if any unknown positional arguments are present.
 func ParseFlags() (*ServerConfig, error) {
 	cfg := &ServerConfig{
 		Address:          "localhost:8080",

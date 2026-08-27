@@ -1,17 +1,19 @@
+// Package model defines the core data types shared between the agent and the server.
 package model
 
+// MetricType identifies the kind of a metric: counter or gauge.
 type MetricType string
 
 const (
+	// TypeCounter is an ever-increasing integer metric (e.g. PollCount).
 	TypeCounter MetricType = "counter"
-	TypeGauge   MetricType = "gauge"
+	// TypeGauge is a floating-point snapshot metric (e.g. Alloc, HeapSys).
+	TypeGauge MetricType = "gauge"
 )
 
-// NOTE: Не усложняем пример, вводя иерархическую вложенность структур.
-// Органичиваясь плоской моделью.
-// Delta и Value объявлены через указатели,
-// что бы отличать значение "0", от не заданного значения
-// и соответственно не кодировать в структуру.
+// Metrics is the universal DTO used by both the REST API and the storage layer.
+// Delta and Value are pointers so that a zero value can be distinguished from
+// an absent value and omitted from JSON output.
 type Metrics struct {
 	ID    string     `json:"id"`
 	MType MetricType `json:"type"`

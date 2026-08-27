@@ -48,6 +48,8 @@ func NewFileObserver(path string) *FileObserver {
 	return &FileObserver{path: path}
 }
 
+// Notify appends the event as a JSON line to the configured file.
+// The file is created if it does not exist. Errors are logged but not propagated.
 func (o *FileObserver) Notify(e Event) {
 	data, err := json.Marshal(e)
 	if err != nil {
@@ -81,6 +83,8 @@ func NewURLObserver(url string) *URLObserver {
 	}
 }
 
+// Notify POSTs the event as JSON to the configured URL.
+// Errors are logged but not propagated.
 func (o *URLObserver) Notify(e Event) {
 	data, err := json.Marshal(e)
 	if err != nil {
