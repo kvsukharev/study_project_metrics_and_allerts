@@ -123,7 +123,12 @@ func run() error {
 
 	var auditObservers []audit.Observer
 	if cfg.AuditFile != "" {
-		auditObservers = append(auditObservers, audit.NewFileObserver(cfg.AuditFile))
+		fo, err := audit.NewFileObserver(cfg.AuditFile)
+		if err != nil {
+			return err
+		}
+		defer fo.Close()
+		auditObservers = append(auditObservers, fo)
 		log.Printf("Audit file enabled: %s", cfg.AuditFile)
 	}
 	if cfg.AuditURL != "" {
@@ -133,6 +138,7 @@ func run() error {
 	var auditSubject *audit.Subject
 	if len(auditObservers) > 0 {
 		auditSubject = audit.NewSubject(auditObservers...)
+		defer auditSubject.Close()
 	}
 
 	h := handlers.NewHandlers(store, cfg.Key, auditSubject)

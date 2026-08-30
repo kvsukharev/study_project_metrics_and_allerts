@@ -3,9 +3,11 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -21,50 +23,89 @@ type Observer interface {
 	Notify(e Event)
 }
 
-// Subject holds observers and broadcasts events to all of them.
+const defaultAuditBufSize = 256
+
+// Subject dispatches audit events to all registered observers asynchronously.
+// Events are queued into a buffered channel and delivered by a single background
+// goroutine, so Notify never blocks the caller even if an observer is slow.
+// Call Close to drain the queue and stop the goroutine on shutdown.
 type Subject struct {
 	observers []Observer
+	ch        chan Event
+	wg        sync.WaitGroup
 }
 
-// NewSubject creates a Subject with the given observers.
+// NewSubject creates a Subject and starts its background dispatch goroutine.
+// The internal queue holds up to defaultAuditBufSize events; if it is full,
+// Notify drops the event and logs a warning instead of blocking.
 func NewSubject(obs ...Observer) *Subject {
-	return &Subject{observers: obs}
+	s := &Subject{
+		observers: obs,
+		ch:        make(chan Event, defaultAuditBufSize),
+	}
+	s.wg.Add(1)
+	go s.dispatch()
+	return s
 }
 
-// Notify sends the event to every registered observer.
-func (s *Subject) Notify(e Event) {
-	for _, o := range s.observers {
-		o.Notify(e)
+// dispatch is the background worker that delivers events to all observers.
+func (s *Subject) dispatch() {
+	defer s.wg.Done()
+	for e := range s.ch {
+		for _, o := range s.observers {
+			o.Notify(e)
+		}
 	}
+}
+
+// Notify enqueues the event for async delivery. If the queue is full the event
+// is dropped and a warning is logged; the handler is never blocked.
+func (s *Subject) Notify(e Event) {
+	select {
+	case s.ch <- e:
+	default:
+		log.Printf("audit: queue full, dropping event for %v", e.Metrics)
+	}
+}
+
+// Close drains the event queue and waits for the dispatch goroutine to finish.
+// Must be called on server shutdown to ensure all in-flight events are delivered.
+func (s *Subject) Close() {
+	close(s.ch)
+	s.wg.Wait()
 }
 
 // FileObserver appends JSON audit events to a file, one per line.
+// The file is opened once at construction and kept open for the lifetime of
+// the observer. Call Close when the observer is no longer needed.
 type FileObserver struct {
-	path string
+	mu  sync.Mutex
+	enc *json.Encoder
+	f   *os.File
 }
 
-// NewFileObserver creates a FileObserver that writes to path.
-func NewFileObserver(path string) *FileObserver {
-	return &FileObserver{path: path}
+// NewFileObserver opens path for appending and returns a ready FileObserver.
+// The file is created if it does not exist. Returns an error immediately if
+// the file cannot be opened, so misconfiguration is visible at startup.
+func NewFileObserver(path string) (*FileObserver, error) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("audit file observer: open %s: %w", path, err)
+	}
+	return &FileObserver{f: f, enc: json.NewEncoder(f)}, nil
+}
+
+// Close releases the underlying file handle.
+func (o *FileObserver) Close() error {
+	return o.f.Close()
 }
 
 // Notify appends the event as a JSON line to the configured file.
-// The file is created if it does not exist. Errors are logged but not propagated.
+// Errors are logged but not propagated.
 func (o *FileObserver) Notify(e Event) {
-	data, err := json.Marshal(e)
-	if err != nil {
-		log.Printf("audit file observer: marshal: %v", err)
-		return
-	}
-
-	f, err := os.OpenFile(o.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		log.Printf("audit file observer: open %s: %v", o.path, err)
-		return
-	}
-	defer f.Close()
-
-	if _, err := f.Write(append(data, '\n')); err != nil {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err := o.enc.Encode(e); err != nil {
 		log.Printf("audit file observer: write: %v", err)
 	}
 }

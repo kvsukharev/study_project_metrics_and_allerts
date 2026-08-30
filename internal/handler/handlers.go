@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
@@ -46,15 +47,10 @@ func extractIP(r *http.Request) string {
 		return ip
 	}
 	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if idx := len(fwd); idx > 0 {
-			// take the first address in a comma-separated list
-			for i := 0; i < len(fwd); i++ {
-				if fwd[i] == ',' {
-					return fwd[:i]
-				}
-			}
-			return fwd
+		if i := strings.IndexByte(fwd, ','); i >= 0 {
+			return fwd[:i]
 		}
+		return fwd
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
