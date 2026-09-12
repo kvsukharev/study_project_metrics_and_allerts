@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/audit"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
 	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
@@ -120,7 +121,27 @@ func run() error {
 		}()
 	}
 
-	h := handlers.NewHandlers(store, cfg.Key)
+	var auditObservers []audit.Observer
+	if cfg.AuditFile != "" {
+		fo, err := audit.NewFileObserver(cfg.AuditFile)
+		if err != nil {
+			return err
+		}
+		defer fo.Close()
+		auditObservers = append(auditObservers, fo)
+		log.Printf("Audit file enabled: %s", cfg.AuditFile)
+	}
+	if cfg.AuditURL != "" {
+		auditObservers = append(auditObservers, audit.NewURLObserver(cfg.AuditURL))
+		log.Printf("Audit URL enabled: %s", cfg.AuditURL)
+	}
+	var auditSubject *audit.Subject
+	if len(auditObservers) > 0 {
+		auditSubject = audit.NewSubject(auditObservers...)
+		defer auditSubject.Close()
+	}
+
+	h := handlers.NewHandlers(store, cfg.Key, auditSubject)
 
 	r := chi.NewRouter()
 	r.Use(middleware.StripSlashes)

@@ -1,3 +1,5 @@
+// Package handlers implements the HTTP handlers for the metrics server.
+// Routes are registered via Handlers.RegisterRoutes onto a chi.Router.
 package handlers
 
 import (
@@ -9,25 +11,74 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/audit"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
 
 	"github.com/go-chi/chi/v5"
 )
 
+// Handlers groups all HTTP handler methods for the metrics server.
+// Create one with NewHandlers and register its routes via RegisterRoutes.
 type Handlers struct {
 	storage storage.Storage
 	key     string
+	audit   *audit.Subject // nil when audit is disabled
 }
 
-func NewHandlers(storage storage.Storage, key string) *Handlers {
-	return &Handlers{storage: storage, key: key}
+// NewHandlers creates a Handlers bound to the given storage backend.
+// key is the HMAC-SHA256 signing key; pass an empty string to disable signing.
+// auditSubject may be nil to disable audit logging.
+func NewHandlers(storage storage.Storage, key string, auditSubject *audit.Subject) *Handlers {
+	return &Handlers{storage: storage, key: key, audit: auditSubject}
 }
 
+// extractIP returns the client IP from the request, preferring X-Real-IP and
+// X-Forwarded-For headers over RemoteAddr.
+func extractIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		if i := strings.IndexByte(fwd, ','); i >= 0 {
+			return fwd[:i]
+		}
+		return fwd
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func (h *Handlers) notifyAudit(r *http.Request, metricNames []string) {
+	if h.audit == nil {
+		return
+	}
+	h.audit.Notify(audit.Event{
+		TS:        time.Now().Unix(),
+		Metrics:   metricNames,
+		IPAddress: extractIP(r),
+	})
+}
+
+// RegisterRoutes mounts all metric endpoints onto r:
+//
+//	POST /update              – update a single metric via JSON body
+//	POST /updates             – batch-update metrics via JSON array
+//	POST /update/{type}/{name}/{value} – update a metric via URL path
+//	POST /value               – retrieve a metric value via JSON body
+//	GET  /value/{type}/{name} – retrieve a metric value via URL path
+//	GET  /                    – HTML dashboard with all current metrics
+//	GET  /ping                – liveness probe for the storage backend
 func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Post("/update", h.updateMetricJSONHandler)
 	r.Post("/value", h.valueMetricJSONHandler)
@@ -44,6 +95,8 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Get("/ping", h.PingHandler())
 }
 
+// PingHandler returns an http.HandlerFunc that checks storage connectivity.
+// Responds 200 OK when the backend is reachable, 500 otherwise.
 func (h *Handlers) PingHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h.storage.Ping(r.Context()); err != nil {
@@ -106,6 +159,9 @@ func decodeBody(r *http.Request, v interface{}) error {
 
 }
 
+// BatchUpdateMetrics handles POST /updates.
+// It accepts a JSON array of Metrics objects and applies them atomically.
+// On success it responds 200 OK and emits an audit event with all metric names.
 func (h *Handlers) BatchUpdateMetrics(w http.ResponseWriter, r *http.Request) {
 	var metrics []model.Metrics
 
@@ -126,6 +182,12 @@ func (h *Handlers) BatchUpdateMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	names := make([]string, 0, len(metrics))
+	for _, m := range metrics {
+		names = append(names, m.ID)
+	}
+	h.notifyAudit(r, names)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -166,6 +228,9 @@ func (h *Handlers) updateMetricJSONHandler(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "marshal error", http.StatusInternalServerError)
 		return
 	}
+
+	h.notifyAudit(r, []string{metric.ID})
+
 	w.Header().Set("Content-Type", "application/json")
 	writeSignedResponse(w, body, h.key)
 }
@@ -174,16 +239,19 @@ func (h *Handlers) updateHandlerChi(w http.ResponseWriter, r *http.Request) {
 	metricType := chi.URLParam(r, "type")
 	metricName := chi.URLParam(r, "name")
 	metricValue := chi.URLParam(r, "value")
-	h.updateMetric(w, metricType, metricName, metricValue)
+	if h.updateMetric(w, metricType, metricName, metricValue) {
+		h.notifyAudit(r, []string{metricName})
+	}
 }
 
-func (h *Handlers) updateMetric(w http.ResponseWriter, metricType, metricName, metricValue string) {
+// updateMetric applies the update and returns true on success.
+func (h *Handlers) updateMetric(w http.ResponseWriter, metricType, metricName, metricValue string) bool {
 	switch metricType {
 	case "gauge":
 		value, err := strconv.ParseFloat(metricValue, 64)
 		if err != nil {
 			http.Error(w, "Invalid gauge value", http.StatusBadRequest)
-			return
+			return false
 		}
 		h.storage.UpdateGauge(metricName, value)
 		log.Printf("Updated gauge %s = %.6f", metricName, value)
@@ -192,19 +260,20 @@ func (h *Handlers) updateMetric(w http.ResponseWriter, metricType, metricName, m
 		value, err := strconv.ParseInt(metricValue, 10, 64)
 		if err != nil {
 			http.Error(w, "Invalid counter value", http.StatusBadRequest)
-			return
+			return false
 		}
 		h.storage.UpdateCounter(metricName, value)
 		log.Printf("Updated counter %s (added %d)", metricName, value)
 
 	default:
 		http.Error(w, "Unknown metric type. Use 'gauge' or 'counter'", http.StatusBadRequest)
-		return
+		return false
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "OK\n")
+	return true
 }
 
 func (h *Handlers) valueHandler(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +375,9 @@ func (h *Handlers) rootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// NewSHA256CheckMiddleware returns middleware that verifies the HashSHA256
+// request header against an HMAC-SHA256 of the request body using key.
+// If key is empty the middleware is a no-op and passes every request through.
 func NewSHA256CheckMiddleware(key string) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

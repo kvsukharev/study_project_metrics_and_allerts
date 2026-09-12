@@ -1,3 +1,6 @@
+// Package agent implements the metrics collection and sending logic for the
+// agent binary. It reads runtime and system metrics, buffers them, and
+// ships them to the server over HTTP.
 package agent
 
 import (
@@ -17,16 +20,20 @@ import (
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
 
+// Collector gathers runtime and gopsutil metrics and makes them available
+// for the sender. It is safe for concurrent use from multiple goroutines.
 type Collector struct {
 	mu        *sync.Mutex
 	gauge     map[string]float64
 	counter   map[string]int64
 	buffer    []model.Metrics
 	BatchSize int
-	client    *http.Client // Добавлено поле для HTTP-клиента
-	endpoint  string       // Добавлено поле для адреса сервера
+	client    *http.Client
+	endpoint  string
 }
 
+// UpdateMetrics reads the current runtime.MemStats and updates all 28 gauge
+// metrics together with the PollCount counter. Safe to call concurrently.
 func (c *Collector) UpdateMetrics() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -66,6 +73,8 @@ func (c *Collector) UpdateMetrics() {
 	c.counter["PollCount"]++
 }
 
+// NewCollector creates a new Collector with the given batch size, HTTP client
+// and server endpoint (e.g. "http://localhost:8080").
 func NewCollector(batchSize int, client *http.Client, endpoint string) *Collector {
 	return &Collector{
 		BatchSize: batchSize,
@@ -77,31 +86,32 @@ func NewCollector(batchSize int, client *http.Client, endpoint string) *Collecto
 	}
 }
 
-// GetGauges возвращает копию всех gauge метрик
+// GetGauges returns a copy of all gauge metrics.
 func (c *Collector) GetGauges() map[string]float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	result := make(map[string]float64)
+	result := make(map[string]float64, len(c.gauge))
 	for k, v := range c.gauge {
 		result[k] = v
 	}
 	return result
 }
 
-// GetCounters возвращает копию всех counter метрик
+// GetCounters returns a copy of all counter metrics.
 func (c *Collector) GetCounters() map[string]int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	result := make(map[string]int64)
+	result := make(map[string]int64, len(c.counter))
 	for k, v := range c.counter {
 		result[k] = v
 	}
 	return result
 }
 
-// GetAllMetrics возвращает все метрики за одну блокировку (без race condition между gauge и counter).
+// GetAllMetrics returns a snapshot of all gauge and counter metrics in a single
+// lock acquisition, preventing a race between the two maps.
 func (c *Collector) GetAllMetrics() []model.Metrics {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -126,7 +136,7 @@ func (c *Collector) GetAllMetrics() []model.Metrics {
 	return metrics
 }
 
-// GetMetricsCount возвращает количество метрик
+// GetMetricsCount returns the number of gauge and counter metrics currently held.
 func (c *Collector) GetMetricsCount() (int, int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

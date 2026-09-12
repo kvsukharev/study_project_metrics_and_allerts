@@ -1,5 +1,8 @@
 package agent
 
+// Sender sends metric updates to the server over HTTP.
+// All methods retry on transient network errors (up to 3 attempts: 1s, 3s, 5s).
+
 import (
 	"bytes"
 	"context"
@@ -11,12 +14,15 @@ import (
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
 
+// Sender sends metric updates to the server over HTTP.
 type Sender struct {
 	client  *http.Client
 	baseURL string
 	key     string
 }
 
+// NewSender creates a Sender that posts to baseURL (e.g. "http://localhost:8080").
+// key is the HMAC-SHA256 signing key; pass an empty string to disable signing.
 func NewSender(baseURL, key string) *Sender {
 	return &Sender{
 		client:  &http.Client{Timeout: 10 * time.Second},
@@ -25,6 +31,7 @@ func NewSender(baseURL, key string) *Sender {
 	}
 }
 
+// SendGauge sends a single gauge metric to the server.
 func (s *Sender) SendGauge(ctx context.Context, name string, value float64) error {
 	return s.sendJSON(ctx, model.Metrics{
 		ID:    name,
@@ -33,6 +40,7 @@ func (s *Sender) SendGauge(ctx context.Context, name string, value float64) erro
 	})
 }
 
+// SendCounter sends a single counter metric delta to the server.
 func (s *Sender) SendCounter(ctx context.Context, name string, value int64) error {
 	return s.sendJSON(ctx, model.Metrics{
 		ID:    name,
@@ -41,6 +49,8 @@ func (s *Sender) SendCounter(ctx context.Context, name string, value int64) erro
 	})
 }
 
+// SendAllMetrics sends every gauge and counter individually via SendGauge/SendCounter.
+// Use SendBatch for better throughput with many metrics.
 func (s *Sender) SendAllMetrics(ctx context.Context, gauges map[string]float64, counters map[string]int64) error {
 	for name, value := range gauges {
 		if err := s.SendGauge(ctx, name, value); err != nil {
@@ -55,6 +65,8 @@ func (s *Sender) SendAllMetrics(ctx context.Context, gauges map[string]float64, 
 	return nil
 }
 
+// SendBatch sends a slice of metrics in a single POST /updates request.
+// It is the preferred method for sending many metrics at once.
 func (s *Sender) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	if len(metrics) == 0 {
 		return nil
@@ -68,6 +80,7 @@ func (s *Sender) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	})
 }
 
+// SendMetric sends a single pre-built Metrics value to the server.
 func (s *Sender) SendMetric(ctx context.Context, m model.Metrics) error {
 	return s.sendJSON(ctx, m)
 }

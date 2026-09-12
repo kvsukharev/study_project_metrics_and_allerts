@@ -1,3 +1,5 @@
+// Package config parses server configuration from CLI flags and environment
+// variables. Environment variables take precedence over flags.
 package config
 
 import (
@@ -7,6 +9,8 @@ import (
 	"github.com/caarlos0/env/v6"
 )
 
+// ServerConfig holds all tunable parameters for the metrics server.
+// Fields are populated from CLI flags; environment variables override them.
 type ServerConfig struct {
 	Key              string `env:"KEY"`
 	Address          string `env:"ADDRESS"`
@@ -15,9 +19,12 @@ type ServerConfig struct {
 	Restore          bool   `env:"RESTORE"`
 	DatabaseDSN      string `env:"DATABASE_DSN"`
 	RateLimit        int    `env:"RATE_LIMIT"`
+	AuditFile        string `env:"AUDIT_FILE"`
+	AuditURL         string `env:"AUDIT_URL"`
 }
 
-
+// ParseFlags parses CLI flags and then overlays environment variables.
+// Returns an error if any unknown positional arguments are present.
 func ParseFlags() (*ServerConfig, error) {
 	cfg := &ServerConfig{
 		Address:          "localhost:8080",
@@ -34,6 +41,8 @@ func ParseFlags() (*ServerConfig, error) {
 	flag.IntVar(&cfg.StoreIntervalSec, "i", 300, "Store interval in seconds (0 = sync write)")
 	flag.StringVar(&cfg.FileStoragePath, "f", "metrics-db.json", "File storage path")
 	flag.BoolVar(&cfg.Restore, "r", false, "Restore metrics from file on start")
+	flag.StringVar(&cfg.AuditFile, "audit-file", "", "Audit log file path (empty = disabled)")
+	flag.StringVar(&cfg.AuditURL, "audit-url", "", "Audit remote URL (empty = disabled)")
 	flag.Parse()
 
 	if err := env.Parse(cfg); err != nil {
@@ -46,4 +55,3 @@ func ParseFlags() (*ServerConfig, error) {
 
 	return cfg, nil
 }
-
