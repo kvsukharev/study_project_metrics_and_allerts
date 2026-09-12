@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// generate:reset
 // Event is a single audit log entry emitted after a successful metric update.
 type Event struct {
 	TS        int64    `json:"ts"`
