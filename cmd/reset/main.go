@@ -95,9 +95,7 @@ func processDir(dir string) error {
 						continue
 					}
 					si := &structInfo{name: ts.Name.Name}
-					for _, f := range st.Fields.List {
-						si.fields = append(si.fields, f)
-					}
+					si.fields = append(si.fields, st.Fields.List...)
 					structs = append(structs, si)
 				}
 			}
