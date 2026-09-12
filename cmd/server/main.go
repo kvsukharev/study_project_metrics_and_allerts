@@ -25,6 +25,19 @@ import (
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
+func na(s string) string {
+	if s == "" {
+		return "N/A"
+	}
+	return s
+}
+
 // syncStorage wraps MemStorage and saves to file after every write (sync mode).
 type syncStorage struct {
 	*storage.MetricsStorage
@@ -262,6 +275,8 @@ func dirOf(path string) string {
 }
 
 func main() {
+	fmt.Printf("Build version: %s\nBuild date: %s\nBuild commit: %s\n",
+		na(buildVersion), na(buildDate), na(buildCommit))
 	if err := run(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

@@ -33,6 +33,19 @@ type AgentConfig struct {
 	RateLimit      int    `env:"RATE_LIMIT"`
 }
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
+func na(s string) string {
+	if s == "" {
+		return "N/A"
+	}
+	return s
+}
+
 const (
 	defaultPollInterval   = 2
 	defaultReportInterval = 10
@@ -42,6 +55,8 @@ const (
 )
 
 func main() {
+	fmt.Printf("Build version: %s\nBuild date: %s\nBuild commit: %s\n",
+		na(buildVersion), na(buildDate), na(buildCommit))
 	if err := run(); err != nil {
 		log.Printf("Application error: %v", err)
 		os.Exit(1)
