@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/logger"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
@@ -39,13 +40,6 @@ var (
 	buildCommit  string
 )
 
-func na(s string) string {
-	if s == "" {
-		return "N/A"
-	}
-	return s
-}
-
 const (
 	defaultPollInterval   = 2
 	defaultReportInterval = 10
@@ -55,8 +49,7 @@ const (
 )
 
 func main() {
-	fmt.Printf("Build version: %s\nBuild date: %s\nBuild commit: %s\n",
-		na(buildVersion), na(buildDate), na(buildCommit))
+	buildinfo.Print(buildVersion, buildDate, buildCommit)
 	if err := run(); err != nil {
 		log.Printf("Application error: %v", err)
 		os.Exit(1)
