@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/logger"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
@@ -33,6 +34,12 @@ type AgentConfig struct {
 	RateLimit      int    `env:"RATE_LIMIT"`
 }
 
+var (
+	buildVersion = "N/A"
+	buildDate    = "N/A"
+	buildCommit  = "N/A"
+)
+
 const (
 	defaultPollInterval   = 2
 	defaultReportInterval = 10
@@ -42,6 +49,7 @@ const (
 )
 
 func main() {
+	buildinfo.Print(buildVersion, buildDate, buildCommit)
 	if err := run(); err != nil {
 		log.Printf("Application error: %v", err)
 		os.Exit(1)
