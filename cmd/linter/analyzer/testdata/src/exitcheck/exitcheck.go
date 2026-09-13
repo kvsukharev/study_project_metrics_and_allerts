@@ -1,24 +1,24 @@
 package main
 
 import (
-	"log"
-	"os"
+	mylog "log"
+	myos "os"
 )
 
-// helper calls os.Exit and log.Fatal outside of main — must be reported.
+// helper calls os.Exit and log.Fatal via aliases — must still be reported.
 func helper() {
-	os.Exit(1)        // want `call to os.Exit is forbidden outside of main.main`
-	log.Fatal("oops") // want `call to log.Fatal is forbidden outside of main.main`
-	log.Fatalf("oops %d", 1) // want `call to log.Fatalf is forbidden outside of main.main`
-	log.Fatalln("oops")     // want `call to log.Fatalln is forbidden outside of main.main`
+	myos.Exit(1)        // want `call to myos.Exit is forbidden outside of main.main`
+	mylog.Fatal("oops") // want `call to mylog.Fatal is forbidden outside of main.main`
+	mylog.Fatalf("oops %d", 1) // want `call to mylog.Fatalf is forbidden outside of main.main`
+	mylog.Fatalln("oops")     // want `call to mylog.Fatalln is forbidden outside of main.main`
 }
 
 func main() {
 	// These are inside main() — must NOT be reported.
 	if err := run(); err != nil {
-		log.Fatalf("error: %v", err)
+		mylog.Fatalf("error: %v", err)
 	}
-	os.Exit(0)
+	myos.Exit(0)
 }
 
 func run() error { return nil }

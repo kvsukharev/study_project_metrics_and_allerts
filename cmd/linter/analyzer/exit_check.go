@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"go/ast"
+	"go/types"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -17,7 +18,9 @@ var ExitAnalyzer = &analysis.Analyzer{
 	Run:      runExitCheck,
 }
 
-// forbiddenCalls is the set of (pkg, func-prefix) pairs we flag.
+// forbiddenCalls maps real import paths to the function names we forbid.
+// Keys are full import paths, not local aliases, so aliased imports are handled
+// correctly (e.g. import mylog "log" still triggers on mylog.Fatal).
 var forbiddenCalls = map[string][]string{
 	"os":  {"Exit"},
 	"log": {"Fatal", "Fatalf", "Fatalln"},
@@ -56,7 +59,20 @@ func runExitCheck(pass *analysis.Pass) (interface{}, error) {
 			return
 		}
 
-		names, known := forbiddenCalls[pkgIdent.Name]
+		// Resolve the identifier through the type system to obtain the real
+		// import path. This handles aliased imports correctly: the alias is
+		// whatever the programmer wrote before the dot, but Imported().Path()
+		// always returns the canonical import path regardless of the alias.
+		obj, ok := pass.TypesInfo.Uses[pkgIdent]
+		if !ok {
+			return
+		}
+		pkgName, ok := obj.(*types.PkgName)
+		if !ok {
+			return
+		}
+
+		names, known := forbiddenCalls[pkgName.Imported().Path()]
 		if !known {
 			return
 		}
@@ -66,7 +82,8 @@ func runExitCheck(pass *analysis.Pass) (interface{}, error) {
 				if mainFuncBody != nil && nodeInBlock(call, mainFuncBody) {
 					return
 				}
-				pass.Reportf(call.Pos(), "call to %s.%s is forbidden outside of main.main", pkgIdent.Name, sel.Sel.Name)
+				pass.Reportf(call.Pos(), "call to %s.%s is forbidden outside of main.main",
+					pkgIdent.Name, sel.Sel.Name)
 			}
 		}
 	})
