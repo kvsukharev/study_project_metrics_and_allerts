@@ -20,12 +20,16 @@ type Pool[T Resettable] struct {
 
 // New creates a Pool that uses newFunc to allocate fresh instances
 // whenever the pool is empty.
+// If newFunc is nil, Get returns the zero value of T when the pool is empty,
+// mirroring the behaviour of sync.Pool when its New field is unset.
 func New[T Resettable](newFunc func() T) *Pool[T] {
-	return &Pool[T]{
-		p: sync.Pool{
-			New: func() any { return newFunc() },
-		},
+	p := &Pool[T]{}
+	if newFunc != nil {
+		p.p.New = func() any { return newFunc() }
+	} else {
+		p.p.New = func() any { var zero T; return zero }
 	}
+	return p
 }
 
 // Get returns an object from the pool, allocating a new one if needed.

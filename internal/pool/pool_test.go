@@ -41,6 +41,16 @@ func TestPutResetsState(t *testing.T) {
 	}
 }
 
+func TestNilFactoryReturnsZeroValue(t *testing.T) {
+	// Passing nil must not panic; Get should return the zero value of T
+	// (nil for pointer types), consistent with sync.Pool when New is unset.
+	p := pool.New[*item](nil)
+	got := p.Get()
+	if got != nil {
+		t.Errorf("expected nil zero value from nil factory, got %v", got)
+	}
+}
+
 func TestGetPutRoundtrip(t *testing.T) {
 	p := pool.New(func() *item { return &item{Tags: make([]string, 0, 4)} })
 
