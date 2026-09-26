@@ -6,28 +6,33 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
 
 // Sender sends metric updates to the server over HTTP.
 type Sender struct {
-	client  *http.Client
-	baseURL string
-	key     string
+	client    *http.Client
+	baseURL   string
+	key       string
+	publicKey *rsa.PublicKey // nil means encryption disabled
 }
 
 // NewSender creates a Sender that posts to baseURL (e.g. "http://localhost:8080").
 // key is the HMAC-SHA256 signing key; pass an empty string to disable signing.
-func NewSender(baseURL, key string) *Sender {
+// pubKey is the RSA public key for payload encryption; pass nil to disable.
+func NewSender(baseURL, key string, pubKey *rsa.PublicKey) *Sender {
 	return &Sender{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: baseURL,
-		key:     key,
+		client:    &http.Client{Timeout: 10 * time.Second},
+		baseURL:   baseURL,
+		key:       key,
+		publicKey: pubKey,
 	}
 }
 
@@ -95,15 +100,27 @@ func (s *Sender) sendJSON(ctx context.Context, m model.Metrics) error {
 	})
 }
 
-// post сжимает body, подписывает и отправляет на path.
+// post compresses, optionally encrypts, signs and sends body to path.
+// HMAC (if key is set) is computed over the unencrypted, uncompressed payload.
 func (s *Sender) post(path string, body []byte) error {
-	compressed := Compress(body)
-	req, err := http.NewRequest("POST", s.baseURL+path, bytes.NewReader(compressed))
+	payload := Compress(body)
+	contentEncoding := "gzip"
+
+	if s.publicKey != nil {
+		encrypted, err := crypto.Encrypt(s.publicKey, payload)
+		if err != nil {
+			return fmt.Errorf("encrypt: %w", err)
+		}
+		payload = encrypted
+		contentEncoding = "encrypted"
+	}
+
+	req, err := http.NewRequest("POST", s.baseURL+path, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Content-Encoding", contentEncoding)
 	if s.key != "" {
 		req.Header.Set("HashSHA256", ComputeHMAC(body, s.key))
 	}

@@ -13,11 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"encoding/json"
+
 	"github.com/caarlos0/env/v6"
 	"gopkg.in/yaml.v3"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/logger"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
@@ -32,6 +36,7 @@ type AgentConfig struct {
 	ReportInterval int    `env:"REPORT_INTERVAL"` // seconds
 	Key            string `env:"KEY"`
 	RateLimit      int    `env:"RATE_LIMIT"`
+	CryptoKey      string `env:"CRYPTO_KEY"`
 }
 
 var (
@@ -47,6 +52,38 @@ const (
 	defaultRateLimit      = 5
 	configPath            = "internal/config/agent.yaml"
 )
+
+// agentJSONConfig mirrors the JSON config file format for the agent.
+// Interval fields accept Go duration strings (e.g. "1s", "10s").
+type agentJSONConfig struct {
+	Address        string `json:"address"`
+	ReportInterval string `json:"report_interval"`
+	PollInterval   string `json:"poll_interval"`
+	CryptoKey      string `json:"crypto_key"`
+}
+
+func loadAgentJSONConfig(path string) (*agentJSONConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read agent config file %s: %w", path, err)
+	}
+	jcfg := &agentJSONConfig{}
+	if err := json.Unmarshal(data, jcfg); err != nil {
+		return nil, fmt.Errorf("parse agent config file %s: %w", path, err)
+	}
+	return jcfg, nil
+}
+
+func parseDurSec(s string, defaultSec int) int {
+	if s == "" {
+		return defaultSec
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return defaultSec
+	}
+	return int(d.Seconds())
+}
 
 func main() {
 	buildinfo.Print(buildVersion, buildDate, buildCommit)
@@ -64,7 +101,16 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if err := parseFlags(cfg); err != nil {
+	jcfg := &agentJSONConfig{}
+	if cfgPath := config.FindConfigPath(); cfgPath != "" {
+		loaded, err := loadAgentJSONConfig(cfgPath)
+		if err != nil {
+			return fmt.Errorf("load agent json config: %w", err)
+		}
+		jcfg = loaded
+	}
+
+	if err := parseFlags(cfg, jcfg); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
@@ -89,7 +135,16 @@ func run() error {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	collector := agent.NewCollector(100, client, serverURL)
-	sender := agent.NewSender(serverURL, cfg.Key)
+
+	sender := agent.NewSender(serverURL, cfg.Key, nil)
+	if cfg.CryptoKey != "" {
+		pk, err := crypto.LoadPublicKey(cfg.CryptoKey)
+		if err != nil {
+			return fmt.Errorf("load public key: %w", err)
+		}
+		sender = agent.NewSender(serverURL, cfg.Key, pk)
+		log.Info().Str("key", cfg.CryptoKey).Msg("Asymmetric encryption enabled")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -225,12 +280,19 @@ func loadConfig(path string) (*AgentConfig, error) {
 	return &rootCfg.AgentConfig, nil
 }
 
-func parseFlags(cfg *AgentConfig) error {
-	flag.StringVar(&cfg.Address, "a", defaultServerAddress, "HTTP server endpoint address")
-	flag.IntVar(&cfg.PollInterval, "p", defaultPollInterval, "Poll interval in seconds")
-	flag.IntVar(&cfg.ReportInterval, "r", defaultReportInterval, "Report interval in seconds")
+func parseFlags(cfg *AgentConfig, jcfg *agentJSONConfig) error {
+	addrDefault := defaultServerAddress
+	if jcfg.Address != "" {
+		addrDefault = jcfg.Address
+	}
+	flag.StringVar(&cfg.Address, "a", addrDefault, "HTTP server endpoint address")
+	flag.IntVar(&cfg.PollInterval, "p", parseDurSec(jcfg.PollInterval, defaultPollInterval), "Poll interval in seconds")
+	flag.IntVar(&cfg.ReportInterval, "r", parseDurSec(jcfg.ReportInterval, defaultReportInterval), "Report interval in seconds")
 	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC SHA256 signing")
 	flag.IntVar(&cfg.RateLimit, "l", defaultRateLimit, "Number of concurrent outgoing requests")
+	flag.StringVar(&cfg.CryptoKey, "crypto-key", jcfg.CryptoKey, "Path to RSA public key for encrypting requests (empty = disabled)")
+	flag.String("c", "", "Path to JSON config file")
+	flag.String("config", "", "Path to JSON config file")
 
 	flag.Parse()
 
