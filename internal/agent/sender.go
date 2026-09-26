@@ -101,11 +101,8 @@ func (s *Sender) sendJSON(ctx context.Context, m model.Metrics) error {
 }
 
 // post compresses, optionally encrypts, signs and sends body to path.
+// HMAC (if key is set) is computed over the unencrypted, uncompressed payload.
 func (s *Sender) post(path string, body []byte) error {
-	if s.key != "" {
-		// HMAC is computed over the unencrypted, uncompressed payload.
-	}
-
 	payload := Compress(body)
 	contentEncoding := "gzip"
 
