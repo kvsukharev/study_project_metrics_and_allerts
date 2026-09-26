@@ -119,6 +119,45 @@ git fetch template && git checkout template/v2 .github
 - **Hexagonal Architecture**
 - **Layered Architecture**
 
+## Переменные сборки
+
+При компиляции можно передать версию, дату сборки и хеш коммита через `-ldflags`.
+Значения выводятся в stdout при каждом старте приложения; если переменная не задана — выводится `N/A`.
+
+| Переменная | Пакет | Описание |
+|---|---|---|
+| `main.buildVersion` | `cmd/server`, `cmd/agent` | Версия релиза, например `v1.2.3` |
+| `main.buildDate` | `cmd/server`, `cmd/agent` | Дата сборки, например `2026-09-13` |
+| `main.buildCommit` | `cmd/server`, `cmd/agent` | Хеш коммита, например `abc1234` |
+
+**Пример сборки сервера с заполненными переменными:**
+
+```bash
+go build \
+  -ldflags "-X main.buildVersion=v1.2.3 -X main.buildDate=$(date +%F) -X main.buildCommit=$(git rev-parse --short HEAD)" \
+  -o server \
+  ./cmd/server/
+```
+
+**Пример сборки агента:**
+
+```bash
+go build \
+  -ldflags "-X main.buildVersion=v1.2.3 -X main.buildDate=$(date +%F) -X main.buildCommit=$(git rev-parse --short HEAD)" \
+  -o agent \
+  ./cmd/agent/
+```
+
+**Вывод при старте:**
+
+```
+Build version: v1.2.3
+Build date: 2026-09-13
+Build commit: abc1234
+```
+
+---
+
 # Запуск с параметрами по умолчанию
 go run cmd/server/main.go
 

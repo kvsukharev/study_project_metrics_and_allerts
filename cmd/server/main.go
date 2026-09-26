@@ -18,11 +18,18 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/audit"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
 	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
+)
+
+var (
+	buildVersion = "N/A"
+	buildDate    = "N/A"
+	buildCommit  = "N/A"
 )
 
 // syncStorage wraps MemStorage and saves to file after every write (sync mode).
@@ -262,6 +269,7 @@ func dirOf(path string) string {
 }
 
 func main() {
+	buildinfo.Print(buildVersion, buildDate, buildCommit)
 	if err := run(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
