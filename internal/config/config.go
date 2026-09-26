@@ -21,6 +21,7 @@ type ServerConfig struct {
 	RateLimit        int    `env:"RATE_LIMIT"`
 	AuditFile        string `env:"AUDIT_FILE"`
 	AuditURL         string `env:"AUDIT_URL"`
+	CryptoKey        string `env:"CRYPTO_KEY"`
 }
 
 // ParseFlags parses CLI flags and then overlays environment variables.
@@ -43,6 +44,7 @@ func ParseFlags() (*ServerConfig, error) {
 	flag.BoolVar(&cfg.Restore, "r", false, "Restore metrics from file on start")
 	flag.StringVar(&cfg.AuditFile, "audit-file", "", "Audit log file path (empty = disabled)")
 	flag.StringVar(&cfg.AuditURL, "audit-url", "", "Audit remote URL (empty = disabled)")
+	flag.StringVar(&cfg.CryptoKey, "crypto-key", "", "Path to RSA private key for decrypting agent requests (empty = disabled)")
 	flag.Parse()
 
 	if err := env.Parse(cfg); err != nil {

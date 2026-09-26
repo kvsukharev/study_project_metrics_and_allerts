@@ -18,6 +18,7 @@ import (
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/logger"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
@@ -32,6 +33,7 @@ type AgentConfig struct {
 	ReportInterval int    `env:"REPORT_INTERVAL"` // seconds
 	Key            string `env:"KEY"`
 	RateLimit      int    `env:"RATE_LIMIT"`
+	CryptoKey      string `env:"CRYPTO_KEY"`
 }
 
 var (
@@ -89,7 +91,16 @@ func run() error {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	collector := agent.NewCollector(100, client, serverURL)
-	sender := agent.NewSender(serverURL, cfg.Key)
+
+	sender := agent.NewSender(serverURL, cfg.Key, nil)
+	if cfg.CryptoKey != "" {
+		pk, err := crypto.LoadPublicKey(cfg.CryptoKey)
+		if err != nil {
+			return fmt.Errorf("load public key: %w", err)
+		}
+		sender = agent.NewSender(serverURL, cfg.Key, pk)
+		log.Info().Str("key", cfg.CryptoKey).Msg("Asymmetric encryption enabled")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -231,6 +242,7 @@ func parseFlags(cfg *AgentConfig) error {
 	flag.IntVar(&cfg.ReportInterval, "r", defaultReportInterval, "Report interval in seconds")
 	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC SHA256 signing")
 	flag.IntVar(&cfg.RateLimit, "l", defaultRateLimit, "Number of concurrent outgoing requests")
+	flag.StringVar(&cfg.CryptoKey, "crypto-key", "", "Path to RSA public key for encrypting requests (empty = disabled)")
 
 	flag.Parse()
 
