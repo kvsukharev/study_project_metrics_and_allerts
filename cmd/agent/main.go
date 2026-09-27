@@ -146,8 +146,13 @@ func run() error {
 		log.Info().Str("key", cfg.CryptoKey).Msg("Asymmetric encryption enabled")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
+
+	// drainCtx is used by workers after the main ctx is cancelled so that
+	// in-flight and queued metrics can still be delivered during graceful shutdown.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer drainCancel()
 
 	// jobs — канал заданий для worker pool
 	jobs := make(chan model.Metrics, cfg.RateLimit*2)
@@ -201,7 +206,12 @@ func run() error {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Info().Msg("Stopping metrics reporting...")
+				log.Info().Msg("Stopping metrics reporting, flushing remaining metrics...")
+				// Final collection: push all accumulated metrics into the jobs
+				// channel so workers can deliver them before the process exits.
+				for _, m := range collector.GetAllMetrics() {
+					jobs <- m
+				}
 				return
 			case <-ticker.C:
 				metrics := collector.GetAllMetrics()
@@ -222,13 +232,18 @@ func run() error {
 	}()
 
 	// Worker pool: cfg.RateLimit параллельных горутин-отправителей.
-	// Читают из jobs до закрытия канала; ctx передаётся в SendMetric для отмены запроса.
+	// During normal operation they use ctx; after cancellation they switch to
+	// drainCtx so queued and in-flight metrics are still delivered gracefully.
 	for i := 0; i < cfg.RateLimit; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for m := range jobs {
-				if err := sender.SendMetric(ctx, m); err != nil {
+				sendCtx := ctx
+				if ctx.Err() != nil {
+					sendCtx = drainCtx
+				}
+				if err := sender.SendMetric(sendCtx, m); err != nil {
 					log.Info().Err(err).Str("metric", m.ID).Msg("Failed to send metric")
 				}
 			}
@@ -251,7 +266,7 @@ func run() error {
 	select {
 	case <-done:
 		log.Info().Msg("Agent stopped gracefully")
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		log.Info().Msg("Shutdown timeout, forcing exit")
 	}
 
