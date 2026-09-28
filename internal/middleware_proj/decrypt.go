@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"crypto/rsa"
 	"io"
-	"log"
 	"net/http"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
@@ -30,21 +29,18 @@ func DecryptMiddleware(privKey *rsa.PrivateKey) func(http.Handler) http.Handler 
 			ciphertext, err := io.ReadAll(r.Body)
 			r.Body.Close()
 			if err != nil {
-				log.Printf("decrypt middleware: read body: %v", err)
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
 
 			compressed, err := crypto.Decrypt(privKey, ciphertext)
 			if err != nil {
-				log.Printf("decrypt middleware: decrypt: %v", err)
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
 
 			gr, err := gzip.NewReader(bytes.NewReader(compressed))
 			if err != nil {
-				log.Printf("decrypt middleware: gzip reader: %v", err)
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
@@ -52,7 +48,6 @@ func DecryptMiddleware(privKey *rsa.PrivateKey) func(http.Handler) http.Handler 
 
 			plain, err := io.ReadAll(gr)
 			if err != nil {
-				log.Printf("decrypt middleware: gzip read: %v", err)
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}

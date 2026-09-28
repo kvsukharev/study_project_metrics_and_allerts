@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"dario.cat/mergo"
 	"github.com/caarlos0/env/v6"
 )
 
@@ -37,6 +38,38 @@ type serverJSONConfig struct {
 	StoreFile     string `json:"store_file"`
 	DatabaseDSN   string `json:"database_dsn"`
 	CryptoKey     string `json:"crypto_key"`
+}
+
+// serverConfigFromJSON converts a parsed JSON config into the typed ServerConfig
+// representation. Only fields present in the JSON file are non-zero in the result;
+// mergo will fill the rest from built-in defaults.
+func serverConfigFromJSON(jcfg *serverJSONConfig) (ServerConfig, error) {
+	cfg := ServerConfig{
+		Address:         jcfg.Address,
+		FileStoragePath: jcfg.StoreFile,
+		DatabaseDSN:     jcfg.DatabaseDSN,
+		CryptoKey:       jcfg.CryptoKey,
+	}
+	if jcfg.StoreInterval != "" {
+		d, err := time.ParseDuration(jcfg.StoreInterval)
+		if err != nil {
+			return ServerConfig{}, fmt.Errorf("store_interval: invalid duration %q: %w", jcfg.StoreInterval, err)
+		}
+		cfg.StoreIntervalSec = int(d.Seconds())
+	}
+	if jcfg.Restore != nil {
+		cfg.Restore = *jcfg.Restore
+	}
+	return cfg, nil
+}
+
+// serverDefaults holds the built-in default values for fields that mergo will
+// use to fill any zero fields not provided by the JSON config or CLI flags.
+var serverDefaults = ServerConfig{
+	Address:          "localhost:8080",
+	RateLimit:        5,
+	StoreIntervalSec: 300,
+	FileStoragePath:  "metrics-db.json",
 }
 
 // FindConfigPath returns the JSON config file path from the -c/-config flag or
@@ -75,19 +108,12 @@ func loadJSONFile(path string, v any) error {
 	return nil
 }
 
-// orStr returns s if non-empty, otherwise def.
-func orStr(s, def string) string {
-	if s != "" {
-		return s
-	}
-	return def
-}
-
 // ParseFlags parses CLI flags and overlays environment variables.
-// If a JSON config file is found via -c/-config/CONFIG, its values are used as
-// flag defaults so that explicit flags and env vars always take precedence.
+// If a JSON config file is found via -c/-config/CONFIG, its values are merged
+// with built-in defaults using mergo — adding a new field only requires changes
+// in one place (serverJSONConfig + serverConfigFromJSON + flag registration).
 func ParseFlags() (*ServerConfig, error) {
-	// Step 1: find and load the JSON config file (lowest priority).
+	// Step 1: load JSON config (lowest priority).
 	jcfg := &serverJSONConfig{}
 	if cfgPath := FindConfigPath(); cfgPath != "" {
 		if err := loadJSONFile(cfgPath, jcfg); err != nil {
@@ -95,38 +121,35 @@ func ParseFlags() (*ServerConfig, error) {
 		}
 	}
 
-	// Step 2: derive typed defaults from JSON values.
-	storeIntervalSec := 300
-	if jcfg.StoreInterval != "" {
-		d, err := time.ParseDuration(jcfg.StoreInterval)
-		if err != nil {
-			return nil, fmt.Errorf("store_interval: %w", err)
-		}
-		storeIntervalSec = int(d.Seconds())
-	}
-	restore := false
-	if jcfg.Restore != nil {
-		restore = *jcfg.Restore
+	// Step 2: convert JSON → typed config (errors on bad values, e.g. invalid duration).
+	fromJSON, err := serverConfigFromJSON(jcfg)
+	if err != nil {
+		return nil, err
 	}
 
-	// Step 3: register flags with JSON-derived defaults.
-	// flag.Parse() will override these defaults when an explicit flag is given.
+	// Step 3: fill zero fields with built-in defaults.
+	if err := mergo.Merge(&fromJSON, serverDefaults); err != nil {
+		return nil, fmt.Errorf("merge config defaults: %w", err)
+	}
+
+	// Step 4: register flags with the merged defaults.
+	// Explicit flags override the merged defaults; env vars (step 5) override flags.
 	cfg := &ServerConfig{}
-	flag.StringVar(&cfg.Address, "a", orStr(jcfg.Address, "localhost:8080"), "HTTP server endpoint address")
+	flag.StringVar(&cfg.Address, "a", fromJSON.Address, "HTTP server endpoint address")
 	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC")
-	flag.StringVar(&cfg.DatabaseDSN, "d", jcfg.DatabaseDSN, "Database connection string")
-	flag.IntVar(&cfg.RateLimit, "l", 5, "Max concurrent requests")
-	flag.IntVar(&cfg.StoreIntervalSec, "i", storeIntervalSec, "Store interval in seconds (0 = sync write)")
-	flag.StringVar(&cfg.FileStoragePath, "f", orStr(jcfg.StoreFile, "metrics-db.json"), "File storage path")
-	flag.BoolVar(&cfg.Restore, "r", restore, "Restore metrics from file on start")
+	flag.StringVar(&cfg.DatabaseDSN, "d", fromJSON.DatabaseDSN, "Database connection string")
+	flag.IntVar(&cfg.RateLimit, "l", fromJSON.RateLimit, "Max concurrent requests")
+	flag.IntVar(&cfg.StoreIntervalSec, "i", fromJSON.StoreIntervalSec, "Store interval in seconds (0 = sync write)")
+	flag.StringVar(&cfg.FileStoragePath, "f", fromJSON.FileStoragePath, "File storage path")
+	flag.BoolVar(&cfg.Restore, "r", fromJSON.Restore, "Restore metrics from file on start")
 	flag.StringVar(&cfg.AuditFile, "audit-file", "", "Audit log file path (empty = disabled)")
 	flag.StringVar(&cfg.AuditURL, "audit-url", "", "Audit remote URL (empty = disabled)")
-	flag.StringVar(&cfg.CryptoKey, "crypto-key", jcfg.CryptoKey, "Path to RSA private key for decrypting agent requests (empty = disabled)")
+	flag.StringVar(&cfg.CryptoKey, "crypto-key", fromJSON.CryptoKey, "Path to RSA private key for decrypting agent requests (empty = disabled)")
 	flag.String("c", "", "Path to JSON config file")
 	flag.String("config", "", "Path to JSON config file")
 	flag.Parse()
 
-	// Step 4: env vars override flags.
+	// Step 5: env vars override flags.
 	if err := env.Parse(cfg); err != nil {
 		return nil, fmt.Errorf("parse env: %w", err)
 	}

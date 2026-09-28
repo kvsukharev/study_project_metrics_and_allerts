@@ -15,6 +15,7 @@ import (
 
 	"encoding/json"
 
+	"dario.cat/mergo"
 	"github.com/caarlos0/env/v6"
 	"gopkg.in/yaml.v3"
 
@@ -74,15 +75,36 @@ func loadAgentJSONConfig(path string) (*agentJSONConfig, error) {
 	return jcfg, nil
 }
 
-func parseDurSec(s string, defaultSec int) int {
-	if s == "" {
-		return defaultSec
+// agentConfigFromJSON converts parsed JSON config into a typed AgentConfig.
+// Only fields present in the JSON file are non-zero; mergo fills the rest
+// from agentDefaults.
+func agentConfigFromJSON(jcfg *agentJSONConfig) (AgentConfig, error) {
+	cfg := AgentConfig{
+		Address:   jcfg.Address,
+		CryptoKey: jcfg.CryptoKey,
 	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return defaultSec
+	if jcfg.PollInterval != "" {
+		d, err := time.ParseDuration(jcfg.PollInterval)
+		if err != nil {
+			return AgentConfig{}, fmt.Errorf("poll_interval: invalid duration %q: %w", jcfg.PollInterval, err)
+		}
+		cfg.PollInterval = int(d.Seconds())
 	}
-	return int(d.Seconds())
+	if jcfg.ReportInterval != "" {
+		d, err := time.ParseDuration(jcfg.ReportInterval)
+		if err != nil {
+			return AgentConfig{}, fmt.Errorf("report_interval: invalid duration %q: %w", jcfg.ReportInterval, err)
+		}
+		cfg.ReportInterval = int(d.Seconds())
+	}
+	return cfg, nil
+}
+
+var agentDefaults = AgentConfig{
+	Address:        defaultServerAddress,
+	PollInterval:   defaultPollInterval,
+	ReportInterval: defaultReportInterval,
+	RateLimit:      defaultRateLimit,
 }
 
 func main() {
@@ -207,10 +229,15 @@ func run() error {
 			select {
 			case <-ctx.Done():
 				log.Info().Msg("Stopping metrics reporting, flushing remaining metrics...")
-				// Final collection: push all accumulated metrics into the jobs
-				// channel so workers can deliver them before the process exits.
+				// Final collection: push accumulated metrics into jobs.
+				// Use select so the write is interrupted if drainCtx expires
+				// before all items are enqueued (prevents goroutine leak).
 				for _, m := range collector.GetAllMetrics() {
-					jobs <- m
+					select {
+					case jobs <- m:
+					case <-drainCtx.Done():
+						return
+					}
 				}
 				return
 			case <-ticker.C:
@@ -296,16 +323,20 @@ func loadConfig(path string) (*AgentConfig, error) {
 }
 
 func parseFlags(cfg *AgentConfig, jcfg *agentJSONConfig) error {
-	addrDefault := defaultServerAddress
-	if jcfg.Address != "" {
-		addrDefault = jcfg.Address
+	fromJSON, err := agentConfigFromJSON(jcfg)
+	if err != nil {
+		return err
 	}
-	flag.StringVar(&cfg.Address, "a", addrDefault, "HTTP server endpoint address")
-	flag.IntVar(&cfg.PollInterval, "p", parseDurSec(jcfg.PollInterval, defaultPollInterval), "Poll interval in seconds")
-	flag.IntVar(&cfg.ReportInterval, "r", parseDurSec(jcfg.ReportInterval, defaultReportInterval), "Report interval in seconds")
+	if err := mergo.Merge(&fromJSON, agentDefaults); err != nil {
+		return fmt.Errorf("merge config defaults: %w", err)
+	}
+
+	flag.StringVar(&cfg.Address, "a", fromJSON.Address, "HTTP server endpoint address")
+	flag.IntVar(&cfg.PollInterval, "p", fromJSON.PollInterval, "Poll interval in seconds")
+	flag.IntVar(&cfg.ReportInterval, "r", fromJSON.ReportInterval, "Report interval in seconds")
 	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC SHA256 signing")
-	flag.IntVar(&cfg.RateLimit, "l", defaultRateLimit, "Number of concurrent outgoing requests")
-	flag.StringVar(&cfg.CryptoKey, "crypto-key", jcfg.CryptoKey, "Path to RSA public key for encrypting requests (empty = disabled)")
+	flag.IntVar(&cfg.RateLimit, "l", fromJSON.RateLimit, "Number of concurrent outgoing requests")
+	flag.StringVar(&cfg.CryptoKey, "crypto-key", fromJSON.CryptoKey, "Path to RSA public key for encrypting requests (empty = disabled)")
 	flag.String("c", "", "Path to JSON config file")
 	flag.String("config", "", "Path to JSON config file")
 
