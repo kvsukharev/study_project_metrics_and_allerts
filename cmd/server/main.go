@@ -19,6 +19,7 @@ import (
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/audit"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
 	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
@@ -75,7 +76,7 @@ func run() error {
 	}
 	defer logger.Sync()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	var (
@@ -154,6 +155,16 @@ func run() error {
 	r.Use(middleware.StripSlashes)
 	r.Use(middlewareproj.LoggingMiddleware(logger))
 	r.Use(middleware.Recoverer)
+
+	if cfg.CryptoKey != "" {
+		privKey, err := crypto.LoadPrivateKey(cfg.CryptoKey)
+		if err != nil {
+			return fmt.Errorf("load private key: %w", err)
+		}
+		r.Use(middlewareproj.DecryptMiddleware(privKey))
+		log.Printf("Asymmetric decryption enabled (key: %s)", cfg.CryptoKey)
+	}
+
 	r.Use(middlewareproj.GzipMiddleware)
 	if cfg.Key != "" {
 		r.Use(handlers.NewSHA256CheckMiddleware(cfg.Key))
