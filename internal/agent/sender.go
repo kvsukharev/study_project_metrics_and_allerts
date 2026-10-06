@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -100,6 +101,21 @@ func (s *Sender) sendJSON(ctx context.Context, m model.Metrics) error {
 	})
 }
 
+// outboundIP returns the preferred outbound IP of the machine by dialling a
+// UDP address (no actual packet is sent). Returns an empty string on failure.
+func outboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return ""
+	}
+	return localAddr.IP.String()
+}
+
 // post compresses, optionally encrypts, signs and sends body to path.
 // HMAC (if key is set) is computed over the unencrypted, uncompressed payload.
 func (s *Sender) post(path string, body []byte) error {
@@ -123,6 +139,9 @@ func (s *Sender) post(path string, body []byte) error {
 	req.Header.Set("Content-Encoding", contentEncoding)
 	if s.key != "" {
 		req.Header.Set("HashSHA256", ComputeHMAC(body, s.key))
+	}
+	if ip := outboundIP(); ip != "" {
+		req.Header.Set("X-Real-IP", ip)
 	}
 
 	resp, err := s.client.Do(req)

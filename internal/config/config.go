@@ -27,6 +27,7 @@ type ServerConfig struct {
 	AuditFile        string `env:"AUDIT_FILE"`
 	AuditURL         string `env:"AUDIT_URL"`
 	CryptoKey        string `env:"CRYPTO_KEY"`
+	TrustedSubnet    string `env:"TRUSTED_SUBNET"` // CIDR, e.g. "192.168.1.0/24"; empty = no restriction
 }
 
 // serverJSONConfig mirrors the JSON config file format for the server.
@@ -38,6 +39,7 @@ type serverJSONConfig struct {
 	StoreFile     string `json:"store_file"`
 	DatabaseDSN   string `json:"database_dsn"`
 	CryptoKey     string `json:"crypto_key"`
+	TrustedSubnet string `json:"trusted_subnet"`
 }
 
 // serverConfigFromJSON converts a parsed JSON config into the typed ServerConfig
@@ -49,6 +51,7 @@ func serverConfigFromJSON(jcfg *serverJSONConfig) (ServerConfig, error) {
 		FileStoragePath: jcfg.StoreFile,
 		DatabaseDSN:     jcfg.DatabaseDSN,
 		CryptoKey:       jcfg.CryptoKey,
+		TrustedSubnet:   jcfg.TrustedSubnet,
 	}
 	if jcfg.StoreInterval != "" {
 		d, err := time.ParseDuration(jcfg.StoreInterval)
@@ -145,6 +148,7 @@ func ParseFlags() (*ServerConfig, error) {
 	flag.StringVar(&cfg.AuditFile, "audit-file", "", "Audit log file path (empty = disabled)")
 	flag.StringVar(&cfg.AuditURL, "audit-url", "", "Audit remote URL (empty = disabled)")
 	flag.StringVar(&cfg.CryptoKey, "crypto-key", fromJSON.CryptoKey, "Path to RSA private key for decrypting agent requests (empty = disabled)")
+	flag.StringVar(&cfg.TrustedSubnet, "t", fromJSON.TrustedSubnet, "Trusted CIDR subnet for X-Real-IP check (empty = disabled)")
 	flag.String("c", "", "Path to JSON config file")
 	flag.String("config", "", "Path to JSON config file")
 	flag.Parse()

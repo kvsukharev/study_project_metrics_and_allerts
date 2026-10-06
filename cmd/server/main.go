@@ -165,6 +165,7 @@ func run() error {
 		log.Printf("Asymmetric decryption enabled (key: %s)", cfg.CryptoKey)
 	}
 
+	r.Use(middlewareproj.TrustedSubnetMiddleware(cfg.TrustedSubnet))
 	r.Use(middlewareproj.GzipMiddleware)
 	if cfg.Key != "" {
 		r.Use(handlers.NewSHA256CheckMiddleware(cfg.Key))
