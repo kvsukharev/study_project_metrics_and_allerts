@@ -38,6 +38,7 @@ type AgentConfig struct {
 	Key            string `env:"KEY"`
 	RateLimit      int    `env:"RATE_LIMIT"`
 	CryptoKey      string `env:"CRYPTO_KEY"`
+	GRPCAddress    string `env:"GRPC_ADDRESS"` // gRPC server address, e.g. "localhost:3200"; empty = disabled
 }
 
 var (
@@ -61,6 +62,7 @@ type agentJSONConfig struct {
 	ReportInterval string `json:"report_interval"`
 	PollInterval   string `json:"poll_interval"`
 	CryptoKey      string `json:"crypto_key"`
+	GRPCAddress    string `json:"grpc_address"`
 }
 
 func loadAgentJSONConfig(path string) (*agentJSONConfig, error) {
@@ -80,8 +82,9 @@ func loadAgentJSONConfig(path string) (*agentJSONConfig, error) {
 // from agentDefaults.
 func agentConfigFromJSON(jcfg *agentJSONConfig) (AgentConfig, error) {
 	cfg := AgentConfig{
-		Address:   jcfg.Address,
-		CryptoKey: jcfg.CryptoKey,
+		Address:     jcfg.Address,
+		CryptoKey:   jcfg.CryptoKey,
+		GRPCAddress: jcfg.GRPCAddress,
 	}
 	if jcfg.PollInterval != "" {
 		d, err := time.ParseDuration(jcfg.PollInterval)
@@ -176,9 +179,6 @@ func run() error {
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer drainCancel()
 
-	// jobs — канал заданий для worker pool
-	jobs := make(chan model.Metrics, cfg.RateLimit*2)
-
 	var wg sync.WaitGroup
 
 	// Горутина 1: сбор runtime-метрик
@@ -217,64 +217,106 @@ func run() error {
 		}
 	}()
 
-	// Горутина 3: reporter — снимает снапшот метрик и кладёт задания в канал
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(jobs)
-		log.Info().Dur("report_interval", reportInterval).Msg("Started metrics reporting")
-		ticker := time.NewTicker(reportInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				log.Info().Msg("Stopping metrics reporting, flushing remaining metrics...")
-				// Final collection: push accumulated metrics into jobs.
-				// Use select so the write is interrupted if drainCtx expires
-				// before all items are enqueued (prevents goroutine leak).
-				for _, m := range collector.GetAllMetrics() {
-					select {
-					case jobs <- m:
-					case <-drainCtx.Done():
-						return
-					}
-				}
-				return
-			case <-ticker.C:
-				metrics := collector.GetAllMetrics()
-				if len(metrics) == 0 {
-					log.Info().Msg("No metrics to send")
-					continue
-				}
-				log.Info().Int("count", len(metrics)).Msg("Dispatching metrics to workers")
-				for _, m := range metrics {
-					select {
-					case jobs <- m:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
+	if cfg.GRPCAddress != "" {
+		// gRPC mode: reporter sends metric batches directly via gRPC.
+		grpcSender, err := agent.NewGRPCSender(cfg.GRPCAddress)
+		if err != nil {
+			return fmt.Errorf("create grpc sender: %w", err)
 		}
-	}()
+		defer grpcSender.Close()
+		log.Info().Str("grpc_address", cfg.GRPCAddress).Msg("gRPC transport enabled")
 
-	// Worker pool: cfg.RateLimit параллельных горутин-отправителей.
-	// During normal operation they use ctx; after cancellation they switch to
-	// drainCtx so queued and in-flight metrics are still delivered gracefully.
-	for i := 0; i < cfg.RateLimit; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for m := range jobs {
-				sendCtx := ctx
-				if ctx.Err() != nil {
-					sendCtx = drainCtx
-				}
-				if err := sender.SendMetric(sendCtx, m); err != nil {
-					log.Info().Err(err).Str("metric", m.ID).Msg("Failed to send metric")
+			log.Info().Dur("report_interval", reportInterval).Msg("Started gRPC batch reporting")
+			ticker := time.NewTicker(reportInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					log.Info().Msg("Stopping gRPC reporting, flushing remaining metrics...")
+					flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if err := grpcSender.SendBatch(flushCtx, collector.GetAllMetrics()); err != nil {
+						log.Info().Err(err).Msg("Failed to flush metrics via gRPC")
+					}
+					return
+				case <-ticker.C:
+					metrics := collector.GetAllMetrics()
+					if len(metrics) == 0 {
+						continue
+					}
+					log.Info().Int("count", len(metrics)).Msg("Sending gRPC batch")
+					if err := grpcSender.SendBatch(ctx, metrics); err != nil {
+						log.Info().Err(err).Msg("Failed to send gRPC batch")
+					}
 				}
 			}
 		}()
+	} else {
+		// HTTP mode: reporter dispatches metrics to the worker pool via jobs channel.
+		jobs := make(chan model.Metrics, cfg.RateLimit*2)
+
+		// Горутина 3: reporter — снимает снапшот метрик и кладёт задания в канал
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer close(jobs)
+			log.Info().Dur("report_interval", reportInterval).Msg("Started metrics reporting")
+			ticker := time.NewTicker(reportInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					log.Info().Msg("Stopping metrics reporting, flushing remaining metrics...")
+					// Final collection: push accumulated metrics into jobs.
+					// Use select so the write is interrupted if drainCtx expires
+					// before all items are enqueued (prevents goroutine leak).
+					for _, m := range collector.GetAllMetrics() {
+						select {
+						case jobs <- m:
+						case <-drainCtx.Done():
+							return
+						}
+					}
+					return
+				case <-ticker.C:
+					metrics := collector.GetAllMetrics()
+					if len(metrics) == 0 {
+						log.Info().Msg("No metrics to send")
+						continue
+					}
+					log.Info().Int("count", len(metrics)).Msg("Dispatching metrics to workers")
+					for _, m := range metrics {
+						select {
+						case jobs <- m:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}
+			}
+		}()
+
+		// Worker pool: cfg.RateLimit параллельных горутин-отправителей.
+		// During normal operation they use ctx; after cancellation they switch to
+		// drainCtx so queued and in-flight metrics are still delivered gracefully.
+		for i := 0; i < cfg.RateLimit; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for m := range jobs {
+					sendCtx := ctx
+					if ctx.Err() != nil {
+						sendCtx = drainCtx
+					}
+					if err := sender.SendMetric(sendCtx, m); err != nil {
+						log.Info().Err(err).Str("metric", m.ID).Msg("Failed to send metric")
+					}
+				}
+			}()
+		}
 	}
 
 	log.Info().Int("workers", cfg.RateLimit).Msg("Agent is running. Press Ctrl+C to stop.")
@@ -337,6 +379,7 @@ func parseFlags(cfg *AgentConfig, jcfg *agentJSONConfig) error {
 	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC SHA256 signing")
 	flag.IntVar(&cfg.RateLimit, "l", fromJSON.RateLimit, "Number of concurrent outgoing requests")
 	flag.StringVar(&cfg.CryptoKey, "crypto-key", fromJSON.CryptoKey, "Path to RSA public key for encrypting requests (empty = disabled)")
+	flag.StringVar(&cfg.GRPCAddress, "grpc", fromJSON.GRPCAddress, "gRPC server address (empty = use HTTP)")
 	flag.String("c", "", "Path to JSON config file")
 	flag.String("config", "", "Path to JSON config file")
 

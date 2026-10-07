@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,14 +17,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/audit"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
-	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
+	grpcserver "github.com/kvsukharev/go-musthave-metrics-tpl/internal/grpcserver"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
 	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
+	pb "github.com/kvsukharev/go-musthave-metrics-tpl/internal/proto"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
 )
 
@@ -173,6 +177,28 @@ func run() error {
 	h.RegisterRoutes(r)
 
 	srv := &http.Server{Addr: cfg.Address, Handler: r}
+
+	// gRPC server (optional — only started when GRPCAddress is set).
+	if cfg.GRPCAddress != "" {
+		lis, err := net.Listen("tcp", cfg.GRPCAddress)
+		if err != nil {
+			return fmt.Errorf("grpc listen %s: %w", cfg.GRPCAddress, err)
+		}
+		gs := grpc.NewServer(
+			grpc.UnaryInterceptor(grpcserver.TrustedSubnetInterceptor(cfg.TrustedSubnet)),
+		)
+		pb.RegisterMetricsServer(gs, grpcserver.New(store))
+		go func() {
+			log.Printf("Starting gRPC server on %s", cfg.GRPCAddress)
+			if err := gs.Serve(lis); err != nil {
+				log.Printf("gRPC server error: %v", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			gs.GracefulStop()
+		}()
+	}
 
 	go func() {
 		<-ctx.Done()

@@ -28,6 +28,7 @@ type ServerConfig struct {
 	AuditURL         string `env:"AUDIT_URL"`
 	CryptoKey        string `env:"CRYPTO_KEY"`
 	TrustedSubnet    string `env:"TRUSTED_SUBNET"` // CIDR, e.g. "192.168.1.0/24"; empty = no restriction
+	GRPCAddress      string `env:"GRPC_ADDRESS"`   // gRPC listen address, e.g. ":3200"; empty = disabled
 }
 
 // serverJSONConfig mirrors the JSON config file format for the server.
@@ -40,6 +41,7 @@ type serverJSONConfig struct {
 	DatabaseDSN   string `json:"database_dsn"`
 	CryptoKey     string `json:"crypto_key"`
 	TrustedSubnet string `json:"trusted_subnet"`
+	GRPCAddress   string `json:"grpc_address"`
 }
 
 // serverConfigFromJSON converts a parsed JSON config into the typed ServerConfig
@@ -52,6 +54,7 @@ func serverConfigFromJSON(jcfg *serverJSONConfig) (ServerConfig, error) {
 		DatabaseDSN:     jcfg.DatabaseDSN,
 		CryptoKey:       jcfg.CryptoKey,
 		TrustedSubnet:   jcfg.TrustedSubnet,
+		GRPCAddress:     jcfg.GRPCAddress,
 	}
 	if jcfg.StoreInterval != "" {
 		d, err := time.ParseDuration(jcfg.StoreInterval)
@@ -149,6 +152,7 @@ func ParseFlags() (*ServerConfig, error) {
 	flag.StringVar(&cfg.AuditURL, "audit-url", "", "Audit remote URL (empty = disabled)")
 	flag.StringVar(&cfg.CryptoKey, "crypto-key", fromJSON.CryptoKey, "Path to RSA private key for decrypting agent requests (empty = disabled)")
 	flag.StringVar(&cfg.TrustedSubnet, "t", fromJSON.TrustedSubnet, "Trusted CIDR subnet for X-Real-IP check (empty = disabled)")
+	flag.StringVar(&cfg.GRPCAddress, "grpc", fromJSON.GRPCAddress, "gRPC server listen address (empty = disabled)")
 	flag.String("c", "", "Path to JSON config file")
 	flag.String("config", "", "Path to JSON config file")
 	flag.Parse()
