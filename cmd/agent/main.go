@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,12 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"encoding/json"
-
-	"dario.cat/mergo"
-	"github.com/caarlos0/env/v6"
-	"gopkg.in/yaml.v3"
-
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
@@ -27,20 +20,6 @@ import (
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
 
-type RootConfig struct {
-	AgentConfig AgentConfig `yaml:"agent_config"`
-}
-
-type AgentConfig struct {
-	Address        string `env:"ADDRESS"`
-	PollInterval   int    `env:"POLL_INTERVAL"`   // seconds
-	ReportInterval int    `env:"REPORT_INTERVAL"` // seconds
-	Key            string `env:"KEY"`
-	RateLimit      int    `env:"RATE_LIMIT"`
-	CryptoKey      string `env:"CRYPTO_KEY"`
-	GRPCAddress    string `env:"GRPC_ADDRESS"` // gRPC server address, e.g. "localhost:3200"; empty = disabled
-}
-
 var (
 	buildVersion = "N/A"
 	buildDate    = "N/A"
@@ -48,67 +27,13 @@ var (
 )
 
 const (
-	defaultPollInterval   = 2
-	defaultReportInterval = 10
-	defaultServerAddress  = "localhost:8080"
-	defaultRateLimit      = 5
-	configPath            = "internal/config/agent.yaml"
+	// drainTimeout is how long workers keep delivering queued metrics after
+	// the shutdown signal is received.
+	drainTimeout = 30 * time.Second
+	// shutdownTimeout is the maximum time to wait for all goroutines to exit
+	// before forcing a hard exit.
+	shutdownTimeout = 30 * time.Second
 )
-
-// agentJSONConfig mirrors the JSON config file format for the agent.
-// Interval fields accept Go duration strings (e.g. "1s", "10s").
-type agentJSONConfig struct {
-	Address        string `json:"address"`
-	ReportInterval string `json:"report_interval"`
-	PollInterval   string `json:"poll_interval"`
-	CryptoKey      string `json:"crypto_key"`
-	GRPCAddress    string `json:"grpc_address"`
-}
-
-func loadAgentJSONConfig(path string) (*agentJSONConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read agent config file %s: %w", path, err)
-	}
-	jcfg := &agentJSONConfig{}
-	if err := json.Unmarshal(data, jcfg); err != nil {
-		return nil, fmt.Errorf("parse agent config file %s: %w", path, err)
-	}
-	return jcfg, nil
-}
-
-// agentConfigFromJSON converts parsed JSON config into a typed AgentConfig.
-// Only fields present in the JSON file are non-zero; mergo fills the rest
-// from agentDefaults.
-func agentConfigFromJSON(jcfg *agentJSONConfig) (AgentConfig, error) {
-	cfg := AgentConfig{
-		Address:     jcfg.Address,
-		CryptoKey:   jcfg.CryptoKey,
-		GRPCAddress: jcfg.GRPCAddress,
-	}
-	if jcfg.PollInterval != "" {
-		d, err := time.ParseDuration(jcfg.PollInterval)
-		if err != nil {
-			return AgentConfig{}, fmt.Errorf("poll_interval: invalid duration %q: %w", jcfg.PollInterval, err)
-		}
-		cfg.PollInterval = int(d.Seconds())
-	}
-	if jcfg.ReportInterval != "" {
-		d, err := time.ParseDuration(jcfg.ReportInterval)
-		if err != nil {
-			return AgentConfig{}, fmt.Errorf("report_interval: invalid duration %q: %w", jcfg.ReportInterval, err)
-		}
-		cfg.ReportInterval = int(d.Seconds())
-	}
-	return cfg, nil
-}
-
-var agentDefaults = AgentConfig{
-	Address:        defaultServerAddress,
-	PollInterval:   defaultPollInterval,
-	ReportInterval: defaultReportInterval,
-	RateLimit:      defaultRateLimit,
-}
 
 func main() {
 	buildinfo.Print(buildVersion, buildDate, buildCommit)
@@ -121,26 +46,9 @@ func main() {
 func run() error {
 	log := logger.GetLogger()
 
-	cfg, err := loadConfig(configPath)
+	cfg, err := config.ParseAgentFlags()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	jcfg := &agentJSONConfig{}
-	if cfgPath := config.FindConfigPath(); cfgPath != "" {
-		loaded, err := loadAgentJSONConfig(cfgPath)
-		if err != nil {
-			return fmt.Errorf("load agent json config: %w", err)
-		}
-		jcfg = loaded
-	}
-
-	if err := parseFlags(cfg, jcfg); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	if cfg.RateLimit <= 0 {
-		cfg.RateLimit = defaultRateLimit
+		return err
 	}
 
 	log.Info().
@@ -165,7 +73,7 @@ func run() error {
 	if cfg.CryptoKey != "" {
 		pk, err := crypto.LoadPublicKey(cfg.CryptoKey)
 		if err != nil {
-			return fmt.Errorf("load public key: %w", err)
+			return fmt.Errorf("load public key %s: %w", cfg.CryptoKey, err)
 		}
 		sender = agent.NewSender(serverURL, cfg.Key, pk)
 		log.Info().Str("key", cfg.CryptoKey).Msg("Asymmetric encryption enabled")
@@ -176,7 +84,7 @@ func run() error {
 
 	// drainCtx is used by workers after the main ctx is cancelled so that
 	// in-flight and queued metrics can still be delivered during graceful shutdown.
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer drainCancel()
 
 	var wg sync.WaitGroup
@@ -236,7 +144,7 @@ func run() error {
 				select {
 				case <-ctx.Done():
 					log.Info().Msg("Stopping gRPC reporting, flushing remaining metrics...")
-					flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					flushCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 					defer cancel()
 					if err := grpcSender.SendBatch(flushCtx, collector.GetAllMetrics()); err != nil {
 						log.Info().Err(err).Msg("Failed to flush metrics via gRPC")
@@ -335,58 +243,8 @@ func run() error {
 	select {
 	case <-done:
 		log.Info().Msg("Agent stopped gracefully")
-	case <-time.After(30 * time.Second):
+	case <-time.After(shutdownTimeout):
 		log.Info().Msg("Shutdown timeout, forcing exit")
-	}
-
-	return nil
-}
-
-func loadConfig(path string) (*AgentConfig, error) {
-	rootCfg := &RootConfig{
-		AgentConfig: AgentConfig{
-			Address:        defaultServerAddress,
-			PollInterval:   defaultPollInterval,
-			ReportInterval: defaultReportInterval,
-			RateLimit:      defaultRateLimit,
-		},
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		log.Printf("Config file %q not found, using defaults", path)
-	} else {
-		if err := yaml.Unmarshal(data, rootCfg); err != nil {
-			return nil, fmt.Errorf("unmarshal yaml: %w", err)
-		}
-	}
-
-	return &rootCfg.AgentConfig, nil
-}
-
-func parseFlags(cfg *AgentConfig, jcfg *agentJSONConfig) error {
-	fromJSON, err := agentConfigFromJSON(jcfg)
-	if err != nil {
-		return err
-	}
-	if err := mergo.Merge(&fromJSON, agentDefaults); err != nil {
-		return fmt.Errorf("merge config defaults: %w", err)
-	}
-
-	flag.StringVar(&cfg.Address, "a", fromJSON.Address, "HTTP server endpoint address")
-	flag.IntVar(&cfg.PollInterval, "p", fromJSON.PollInterval, "Poll interval in seconds")
-	flag.IntVar(&cfg.ReportInterval, "r", fromJSON.ReportInterval, "Report interval in seconds")
-	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC SHA256 signing")
-	flag.IntVar(&cfg.RateLimit, "l", fromJSON.RateLimit, "Number of concurrent outgoing requests")
-	flag.StringVar(&cfg.CryptoKey, "crypto-key", fromJSON.CryptoKey, "Path to RSA public key for encrypting requests (empty = disabled)")
-	flag.StringVar(&cfg.GRPCAddress, "grpc", fromJSON.GRPCAddress, "gRPC server address (empty = use HTTP)")
-	flag.String("c", "", "Path to JSON config file")
-	flag.String("config", "", "Path to JSON config file")
-
-	flag.Parse()
-
-	if err := env.Parse(cfg); err != nil {
-		return fmt.Errorf("parse env: %w", err)
 	}
 
 	return nil

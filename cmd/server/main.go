@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
@@ -23,9 +23,9 @@ import (
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
-	grpcserver "github.com/kvsukharev/go-musthave-metrics-tpl/internal/grpcserver"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/grpcserver"
 	handlers "github.com/kvsukharev/go-musthave-metrics-tpl/internal/handler"
-	middlewareproj "github.com/kvsukharev/go-musthave-metrics-tpl/internal/middleware_proj"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/httpmw"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 	pb "github.com/kvsukharev/go-musthave-metrics-tpl/internal/proto"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/storage"
@@ -72,6 +72,14 @@ func run() error {
 	cfg, err := config.ParseFlags()
 	if err != nil {
 		return err
+	}
+
+	var trustedSubnet *net.IPNet
+	if cfg.TrustedSubnet != "" {
+		_, trustedSubnet, err = net.ParseCIDR(cfg.TrustedSubnet)
+		if err != nil {
+			return fmt.Errorf("invalid trusted_subnet %q: %w", cfg.TrustedSubnet, err)
+		}
 	}
 
 	logger, err := zap.NewProduction()
@@ -156,21 +164,21 @@ func run() error {
 	h := handlers.NewHandlers(store, cfg.Key, auditSubject)
 
 	r := chi.NewRouter()
-	r.Use(middleware.StripSlashes)
-	r.Use(middlewareproj.LoggingMiddleware(logger))
-	r.Use(middleware.Recoverer)
+	r.Use(chimiddleware.StripSlashes)
+	r.Use(httpmw.LoggingMiddleware(logger))
+	r.Use(chimiddleware.Recoverer)
 
 	if cfg.CryptoKey != "" {
 		privKey, err := crypto.LoadPrivateKey(cfg.CryptoKey)
 		if err != nil {
 			return fmt.Errorf("load private key: %w", err)
 		}
-		r.Use(middlewareproj.DecryptMiddleware(privKey))
+		r.Use(httpmw.DecryptMiddleware(privKey))
 		log.Printf("Asymmetric decryption enabled (key: %s)", cfg.CryptoKey)
 	}
 
-	r.Use(middlewareproj.TrustedSubnetMiddleware(cfg.TrustedSubnet))
-	r.Use(middlewareproj.GzipMiddleware)
+	r.Use(httpmw.TrustedSubnetMiddleware(trustedSubnet))
+	r.Use(httpmw.GzipMiddleware)
 	if cfg.Key != "" {
 		r.Use(handlers.NewSHA256CheckMiddleware(cfg.Key))
 	}
@@ -185,7 +193,7 @@ func run() error {
 			return fmt.Errorf("grpc listen %s: %w", cfg.GRPCAddress, err)
 		}
 		gs := grpc.NewServer(
-			grpc.UnaryInterceptor(grpcserver.TrustedSubnetInterceptor(cfg.TrustedSubnet)),
+			grpc.UnaryInterceptor(grpcserver.TrustedSubnetInterceptor(trustedSubnet)),
 		)
 		pb.RegisterMetricsServer(gs, grpcserver.New(store))
 		go func() {
@@ -196,7 +204,16 @@ func run() error {
 		}()
 		go func() {
 			<-ctx.Done()
-			gs.GracefulStop()
+			grpcDone := make(chan struct{})
+			go func() {
+				gs.GracefulStop()
+				close(grpcDone)
+			}()
+			select {
+			case <-grpcDone:
+			case <-time.After(5 * time.Second):
+				gs.Stop()
+			}
 		}()
 	}
 

@@ -23,6 +23,7 @@ type Sender struct {
 	baseURL   string
 	key       string
 	publicKey *rsa.PublicKey // nil means encryption disabled
+	localIP   string         // cached once at construction; empty = header omitted
 }
 
 // NewSender creates a Sender that posts to baseURL (e.g. "http://localhost:8080").
@@ -34,6 +35,7 @@ func NewSender(baseURL, key string, pubKey *rsa.PublicKey) *Sender {
 		baseURL:   baseURL,
 		key:       key,
 		publicKey: pubKey,
+		localIP:   outboundIP(),
 	}
 }
 
@@ -140,8 +142,8 @@ func (s *Sender) post(path string, body []byte) error {
 	if s.key != "" {
 		req.Header.Set("HashSHA256", ComputeHMAC(body, s.key))
 	}
-	if ip := outboundIP(); ip != "" {
-		req.Header.Set("X-Real-IP", ip)
+	if s.localIP != "" {
+		req.Header.Set("X-Real-IP", s.localIP)
 	}
 
 	resp, err := s.client.Do(req)

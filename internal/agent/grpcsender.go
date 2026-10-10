@@ -14,8 +14,9 @@ import (
 
 // GRPCSender sends metrics to the server over gRPC.
 type GRPCSender struct {
-	client pb.MetricsClient
-	conn   *grpc.ClientConn
+	client  pb.MetricsClient
+	conn    *grpc.ClientConn
+	localIP string // cached once at construction; empty = metadata omitted
 }
 
 // NewGRPCSender dials addr (e.g. "localhost:3200") and returns a GRPCSender.
@@ -26,8 +27,9 @@ func NewGRPCSender(addr string) (*GRPCSender, error) {
 		return nil, fmt.Errorf("dial grpc %s: %w", addr, err)
 	}
 	return &GRPCSender{
-		client: pb.NewMetricsClient(conn),
-		conn:   conn,
+		client:  pb.NewMetricsClient(conn),
+		conn:    conn,
+		localIP: outboundIP(),
 	}, nil
 }
 
@@ -48,8 +50,8 @@ func (g *GRPCSender) SendBatch(ctx context.Context, metrics []model.Metrics) err
 	}
 
 	md := metadata.Pairs()
-	if ip := outboundIP(); ip != "" {
-		md.Set("x-real-ip", ip)
+	if g.localIP != "" {
+		md.Set("x-real-ip", g.localIP)
 	}
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
