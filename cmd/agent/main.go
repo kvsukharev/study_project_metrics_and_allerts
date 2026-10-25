@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,26 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/caarlos0/env/v6"
-	"gopkg.in/yaml.v3"
-
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/agent"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/buildinfo"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/config"
+	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/crypto"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/logger"
 	"github.com/kvsukharev/go-musthave-metrics-tpl/internal/model"
 )
-
-type RootConfig struct {
-	AgentConfig AgentConfig `yaml:"agent_config"`
-}
-
-type AgentConfig struct {
-	Address        string `env:"ADDRESS"`
-	PollInterval   int    `env:"POLL_INTERVAL"`   // seconds
-	ReportInterval int    `env:"REPORT_INTERVAL"` // seconds
-	Key            string `env:"KEY"`
-	RateLimit      int    `env:"RATE_LIMIT"`
-}
 
 var (
 	buildVersion = "N/A"
@@ -41,11 +27,12 @@ var (
 )
 
 const (
-	defaultPollInterval   = 2
-	defaultReportInterval = 10
-	defaultServerAddress  = "localhost:8080"
-	defaultRateLimit      = 5
-	configPath            = "internal/config/agent.yaml"
+	// drainTimeout is how long workers keep delivering queued metrics after
+	// the shutdown signal is received.
+	drainTimeout = 30 * time.Second
+	// shutdownTimeout is the maximum time to wait for all goroutines to exit
+	// before forcing a hard exit.
+	shutdownTimeout = 30 * time.Second
 )
 
 func main() {
@@ -59,17 +46,9 @@ func main() {
 func run() error {
 	log := logger.GetLogger()
 
-	cfg, err := loadConfig(configPath)
+	cfg, err := config.ParseAgentFlags()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	if err := parseFlags(cfg); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	if cfg.RateLimit <= 0 {
-		cfg.RateLimit = defaultRateLimit
+		return err
 	}
 
 	log.Info().
@@ -89,13 +68,24 @@ func run() error {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	collector := agent.NewCollector(100, client, serverURL)
-	sender := agent.NewSender(serverURL, cfg.Key)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	sender := agent.NewSender(serverURL, cfg.Key, nil)
+	if cfg.CryptoKey != "" {
+		pk, err := crypto.LoadPublicKey(cfg.CryptoKey)
+		if err != nil {
+			return fmt.Errorf("load public key %s: %w", cfg.CryptoKey, err)
+		}
+		sender = agent.NewSender(serverURL, cfg.Key, pk)
+		log.Info().Str("key", cfg.CryptoKey).Msg("Asymmetric encryption enabled")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
-	// jobs — канал заданий для worker pool
-	jobs := make(chan model.Metrics, cfg.RateLimit*2)
+	// drainCtx is used by workers after the main ctx is cancelled so that
+	// in-flight and queued metrics can still be delivered during graceful shutdown.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer drainCancel()
 
 	var wg sync.WaitGroup
 
@@ -135,49 +125,106 @@ func run() error {
 		}
 	}()
 
-	// Горутина 3: reporter — снимает снапшот метрик и кладёт задания в канал
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(jobs)
-		log.Info().Dur("report_interval", reportInterval).Msg("Started metrics reporting")
-		ticker := time.NewTicker(reportInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				log.Info().Msg("Stopping metrics reporting...")
-				return
-			case <-ticker.C:
-				metrics := collector.GetAllMetrics()
-				if len(metrics) == 0 {
-					log.Info().Msg("No metrics to send")
-					continue
-				}
-				log.Info().Int("count", len(metrics)).Msg("Dispatching metrics to workers")
-				for _, m := range metrics {
-					select {
-					case jobs <- m:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
+	if cfg.GRPCAddress != "" {
+		// gRPC mode: reporter sends metric batches directly via gRPC.
+		grpcSender, err := agent.NewGRPCSender(cfg.GRPCAddress)
+		if err != nil {
+			return fmt.Errorf("create grpc sender: %w", err)
 		}
-	}()
+		defer grpcSender.Close()
+		log.Info().Str("grpc_address", cfg.GRPCAddress).Msg("gRPC transport enabled")
 
-	// Worker pool: cfg.RateLimit параллельных горутин-отправителей.
-	// Читают из jobs до закрытия канала; ctx передаётся в SendMetric для отмены запроса.
-	for i := 0; i < cfg.RateLimit; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for m := range jobs {
-				if err := sender.SendMetric(ctx, m); err != nil {
-					log.Info().Err(err).Str("metric", m.ID).Msg("Failed to send metric")
+			log.Info().Dur("report_interval", reportInterval).Msg("Started gRPC batch reporting")
+			ticker := time.NewTicker(reportInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					log.Info().Msg("Stopping gRPC reporting, flushing remaining metrics...")
+					flushCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+					defer cancel()
+					if err := grpcSender.SendBatch(flushCtx, collector.GetAllMetrics()); err != nil {
+						log.Info().Err(err).Msg("Failed to flush metrics via gRPC")
+					}
+					return
+				case <-ticker.C:
+					metrics := collector.GetAllMetrics()
+					if len(metrics) == 0 {
+						continue
+					}
+					log.Info().Int("count", len(metrics)).Msg("Sending gRPC batch")
+					if err := grpcSender.SendBatch(ctx, metrics); err != nil {
+						log.Info().Err(err).Msg("Failed to send gRPC batch")
+					}
 				}
 			}
 		}()
+	} else {
+		// HTTP mode: reporter dispatches metrics to the worker pool via jobs channel.
+		jobs := make(chan model.Metrics, cfg.RateLimit*2)
+
+		// Горутина 3: reporter — снимает снапшот метрик и кладёт задания в канал
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer close(jobs)
+			log.Info().Dur("report_interval", reportInterval).Msg("Started metrics reporting")
+			ticker := time.NewTicker(reportInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					log.Info().Msg("Stopping metrics reporting, flushing remaining metrics...")
+					// Final collection: push accumulated metrics into jobs.
+					// Use select so the write is interrupted if drainCtx expires
+					// before all items are enqueued (prevents goroutine leak).
+					for _, m := range collector.GetAllMetrics() {
+						select {
+						case jobs <- m:
+						case <-drainCtx.Done():
+							return
+						}
+					}
+					return
+				case <-ticker.C:
+					metrics := collector.GetAllMetrics()
+					if len(metrics) == 0 {
+						log.Info().Msg("No metrics to send")
+						continue
+					}
+					log.Info().Int("count", len(metrics)).Msg("Dispatching metrics to workers")
+					for _, m := range metrics {
+						select {
+						case jobs <- m:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}
+			}
+		}()
+
+		// Worker pool: cfg.RateLimit параллельных горутин-отправителей.
+		// During normal operation they use ctx; after cancellation they switch to
+		// drainCtx so queued and in-flight metrics are still delivered gracefully.
+		for i := 0; i < cfg.RateLimit; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for m := range jobs {
+					sendCtx := ctx
+					if ctx.Err() != nil {
+						sendCtx = drainCtx
+					}
+					if err := sender.SendMetric(sendCtx, m); err != nil {
+						log.Info().Err(err).Str("metric", m.ID).Msg("Failed to send metric")
+					}
+				}
+			}()
+		}
 	}
 
 	log.Info().Int("workers", cfg.RateLimit).Msg("Agent is running. Press Ctrl+C to stop.")
@@ -196,46 +243,8 @@ func run() error {
 	select {
 	case <-done:
 		log.Info().Msg("Agent stopped gracefully")
-	case <-time.After(5 * time.Second):
+	case <-time.After(shutdownTimeout):
 		log.Info().Msg("Shutdown timeout, forcing exit")
-	}
-
-	return nil
-}
-
-func loadConfig(path string) (*AgentConfig, error) {
-	rootCfg := &RootConfig{
-		AgentConfig: AgentConfig{
-			Address:        defaultServerAddress,
-			PollInterval:   defaultPollInterval,
-			ReportInterval: defaultReportInterval,
-			RateLimit:      defaultRateLimit,
-		},
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		log.Printf("Config file %q not found, using defaults", path)
-	} else {
-		if err := yaml.Unmarshal(data, rootCfg); err != nil {
-			return nil, fmt.Errorf("unmarshal yaml: %w", err)
-		}
-	}
-
-	return &rootCfg.AgentConfig, nil
-}
-
-func parseFlags(cfg *AgentConfig) error {
-	flag.StringVar(&cfg.Address, "a", defaultServerAddress, "HTTP server endpoint address")
-	flag.IntVar(&cfg.PollInterval, "p", defaultPollInterval, "Poll interval in seconds")
-	flag.IntVar(&cfg.ReportInterval, "r", defaultReportInterval, "Report interval in seconds")
-	flag.StringVar(&cfg.Key, "k", "", "Secret key for HMAC SHA256 signing")
-	flag.IntVar(&cfg.RateLimit, "l", defaultRateLimit, "Number of concurrent outgoing requests")
-
-	flag.Parse()
-
-	if err := env.Parse(cfg); err != nil {
-		return fmt.Errorf("parse env: %w", err)
 	}
 
 	return nil

@@ -1,4 +1,4 @@
-package middlewareproj
+package httpmw
 
 import (
 	"compress/gzip"
